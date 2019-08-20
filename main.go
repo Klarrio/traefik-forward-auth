@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -57,8 +58,8 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		// Set the CSRF cookie
 		http.SetCookie(w, fw.MakeCSRFCookie(r, nonce))
 		logger.Debug("Set CSRF cookie and redirecting to oidc login")
-		logger.Debug("uri.Path was %s",uri.Path)
-		logger.Debug("fw.Path was %s",fw.Path)
+		logger.Debug("uri.Path was %s", uri.Path)
+		logger.Debug("fw.Path was %s", fw.Path)
 
 		// Forward them on
 		http.Redirect(w, r, fw.GetLoginURL(r, nonce), http.StatusTemporaryRedirect)
@@ -144,16 +145,25 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 func getOidcConfig(oidc string) map[string]interface{} {
 	uri, err := url.Parse(oidc)
 	if err != nil {
-		log.Fatal("failed to parse oidc string")
+		log.Fatalf("failed to parse oidc string: %s", err)
 	}
 	uri.Path = path.Join(uri.Path, "/.well-known/openid-configuration")
-	res, err := http.Get(uri.String())
-	if err != nil {
-		log.Fatal("failed to get oidc parametere from oidc connect")
+
+	// allow self-signed certs
+	client := http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
 	}
+
+	res, err := client.Get(uri.String())
+	if err != nil {
+		log.Fatalf("failed to get oidc parametere from oidc connect: %s", err)
+	}
+	defer res.Body.Close()
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		log.Fatal("failed to read response body")
+		log.Fatalf("failed to read response body: %s", err)
 	}
 	var result map[string]interface{}
 	json.Unmarshal(body, &result)
@@ -200,18 +210,18 @@ func main() {
 
 	var oidcParams = getOidcConfig(*oidcIssuer)
 
-	loginUrl, err := url.Parse((oidcParams["authorization_endpoint"].(string)))
+	loginURL, err := url.Parse((oidcParams["authorization_endpoint"].(string)))
 	if err != nil {
-		log.Fatal("unable to parse login url")
+		log.Fatalf("unable to parse login url: %s", err)
 	}
 
-	tokenUrl, err := url.Parse((oidcParams["token_endpoint"].(string)))
+	tokenURL, err := url.Parse((oidcParams["token_endpoint"].(string)))
 	if err != nil {
-		log.Fatal("unable to parse token url")
+		log.Fatalf("unable to parse token url: %s", err)
 	}
-	userUrl, err := url.Parse((oidcParams["userinfo_endpoint"].(string)))
+	userURL, err := url.Parse((oidcParams["userinfo_endpoint"].(string)))
 	if err != nil {
-		log.Fatal("unable to parse user url")
+		log.Fatalf("unable to parse user url: %s", err)
 	}
 
 	// Parse lists
@@ -243,9 +253,9 @@ func main() {
 		ClientSecret: *clientSecret,
 		Scope:        "openid profile email",
 
-		LoginURL: loginUrl,
-		TokenURL: tokenUrl,
-		UserURL:  userUrl,
+		LoginURL: loginURL,
+		TokenURL: tokenURL,
+		UserURL:  userURL,
 
 		CookieName:     *cookieName,
 		CSRFCookieName: *cSRFCookieName,

@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -54,23 +55,23 @@ func (f *ForwardAuth) ValidateCookie(r *http.Request, c *http.Cookie) (bool, str
 
 	mac, err := base64.URLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return false, "", errors.New("Unable to decode cookie mac")
+		return false, "", fmt.Errorf("Unable to decode cookie mac: %s", err)
 	}
 
 	expectedSignature := f.cookieSignature(r, parts[2], parts[1])
 	expected, err := base64.URLEncoding.DecodeString(expectedSignature)
 	if err != nil {
-		return false, "", errors.New("Unable to generate mac")
+		return false, "", fmt.Errorf("Unable to generate mac: %s", err)
 	}
 
 	// Valid token?
 	if !hmac.Equal(mac, expected) {
-		return false, "", errors.New("Invalid cookie mac")
+		return false, "", fmt.Errorf("Invalid cookie mac %s, expected %s", mac, expected)
 	}
 
 	expires, err := strconv.ParseInt(parts[1], 10, 64)
 	if err != nil {
-		return false, "", errors.New("Unable to parse cookie expiry")
+		return false, "", fmt.Errorf("Unable to parse cookie expiry: %s", err)
 	}
 
 	// Has it expired?
@@ -82,7 +83,6 @@ func (f *ForwardAuth) ValidateCookie(r *http.Request, c *http.Cookie) (bool, str
 	return true, parts[2], nil
 }
 
-// Validate email
 func (f *ForwardAuth) ValidateEmail(email string) bool {
 	found := false
 	if len(f.Whitelist) > 0 {
@@ -145,7 +145,14 @@ func (f *ForwardAuth) ExchangeCode(r *http.Request, code string) (string, error)
 	form.Set("redirect_uri", f.redirectUri(r))
 	form.Set("code", code)
 
-	res, err := http.PostForm(fw.TokenURL.String(), form)
+	// allow self-signed certs
+	client := http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+
+	res, err := client.PostForm(fw.TokenURL.String(), form)
 	if err != nil {
 		return "", err
 	}
@@ -169,7 +176,11 @@ type User struct {
 func (f *ForwardAuth) GetUser(token string) (User, error) {
 	var user User
 
-	client := &http.Client{}
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
 	req, err := http.NewRequest("GET", fw.UserURL.String(), nil)
 	if err != nil {
 		return user, err
