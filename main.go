@@ -125,6 +125,20 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 		return
 	}
 
+	if fw.UmaAuthorization {
+		isAllowedAccess, err := fw.VerifyAccess(token)
+		if err != nil {
+			logger.Errorf("Access verification failed with: %v", err)
+			http.Error(w, "Service unavailable", 503)
+			return
+		}
+		if !isAllowedAccess {
+			logger.Infof("Not authorized")
+			http.Error(w, "Not authorized", 401)
+			return
+		}
+	}
+
 	// Get user
 	user, err := fw.GetUser(token)
 	if err != nil {
@@ -190,6 +204,7 @@ func main() {
 	domainList := flag.String("domain", "", "Comma separated list of email domains to allow")
 	emailWhitelist := flag.String("whitelist", "", "Comma separated list of emails to allow")
 	prompt := flag.String("prompt", "", "Space separated list of OpenID prompt options")
+	umaAuthorization := flag.Bool("uma-authorization", false, "whether UMA-based authorization will be performed")
 	logLevel := flag.String("log-level", "warn", "Log level: trace, debug, info, warn, error, fatal, panic")
 	logFormat := flag.String("log-format", "text", "Log format: text, json, pretty")
 
@@ -265,7 +280,8 @@ func main() {
 		Domain:    domain,
 		Whitelist: whitelist,
 
-		Prompt: *prompt,
+		Prompt:           *prompt,
+		UmaAuthorization: *umaAuthorization,
 	}
 
 	// Attach handler

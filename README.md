@@ -85,6 +85,7 @@ The following configuration is supported:
 |-lifetime|int|Session length in seconds (default 43200)|
 |-url-path|string|Callback URL (default "_oauth")|
 |-prompt|string|Space separated list of [OpenID prompt options](https://developers.google.com/identity/protocols/OpenIDConnect#prompt)|
+|-uma_authorization|bool|whether [UMA](https://docs.kantarainitiative.org/uma/wg/oauth-uma-grant-2.0-05.html)-based authorization will be performed|
 |-log-level|string|Log level: trace, debug, info, warn, error, fatal, panic (default "warn")|
 |-log-format|string|Log format: text, json, pretty (default "text")|
 
