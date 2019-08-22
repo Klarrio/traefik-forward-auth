@@ -37,11 +37,13 @@ type ForwardAuth struct {
 	CSRFCookieName string
 	CookieSecure   bool
 
+	InsecureCertificates bool
+
 	Domain    []string
 	Whitelist []string
 
 	Prompt           string
-	UmaAuthorization bool
+	UMAAuthorization bool
 }
 
 // Request Validation
@@ -146,10 +148,10 @@ func (f *ForwardAuth) ExchangeCode(r *http.Request, code string) (string, error)
 	form.Set("redirect_uri", f.redirectUri(r))
 	form.Set("code", code)
 
-	// allow self-signed certs
+	// allow insecure certificates when enabled
 	client := http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: f.InsecureCertificates},
 		},
 	}
 
@@ -168,10 +170,10 @@ func (f *ForwardAuth) ExchangeCode(r *http.Request, code string) (string, error)
 // VerifyAccess checks whether access is allowed to all resources of the client using the UMA protocol.
 // https://www.keycloak.org/docs/4.8/authorization_services/index.html#_service_obtaining_permissions
 func (f *ForwardAuth) VerifyAccess(token string) (bool, error) {
-	// allow self-signed certs
+	// allow insecure certificates when enabled
 	client := http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: f.InsecureCertificates},
 		},
 	}
 
@@ -208,7 +210,7 @@ func (f *ForwardAuth) GetUser(token string) (User, error) {
 
 	client := &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: f.InsecureCertificates},
 		},
 	}
 	req, err := http.NewRequest("GET", fw.UserURL.String(), nil)

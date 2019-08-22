@@ -125,7 +125,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 		return
 	}
 
-	if fw.UmaAuthorization {
+	if fw.UMAAuthorization {
 		isAllowedAccess, err := fw.VerifyAccess(token)
 		if err != nil {
 			logger.Errorf("Access verification failed with: %v", err)
@@ -156,17 +156,17 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 	http.Redirect(w, r, redirect, http.StatusTemporaryRedirect)
 }
 
-func getOidcConfig(oidc string) map[string]interface{} {
+func getOidcConfig(oidc string, insecureCertificates bool) map[string]interface{} {
 	uri, err := url.Parse(oidc)
 	if err != nil {
 		log.Fatalf("failed to parse oidc string: %s", err)
 	}
 	uri.Path = path.Join(uri.Path, "/.well-known/openid-configuration")
 
-	// allow self-signed certs
+	// allow insecure certificates when enabled
 	client := http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: insecureCertificates},
 		},
 	}
 
@@ -201,6 +201,7 @@ func main() {
 	cookieDomainList := flag.String("cookie-domains", "", "Comma separated list of cookie domains") //todo
 	cookieSecret := flag.String("cookie-secret", "", "Deprecated")
 	cookieSecure := flag.Bool("cookie-secure", true, "Use secure cookies")
+	insecureCertificates := flag.Bool("insecure-certificates", false, "Allow insecure certificates")
 	domainList := flag.String("domain", "", "Comma separated list of email domains to allow")
 	emailWhitelist := flag.String("whitelist", "", "Comma separated list of emails to allow")
 	prompt := flag.String("prompt", "", "Space separated list of OpenID prompt options")
@@ -223,7 +224,7 @@ func main() {
 		log.Fatal("client-id, client-secret, secret and oidc-issuer must all be set")
 	}
 
-	var oidcParams = getOidcConfig(*oidcIssuer)
+	var oidcParams = getOidcConfig(*oidcIssuer, *insecureCertificates)
 
 	loginURL, err := url.Parse((oidcParams["authorization_endpoint"].(string)))
 	if err != nil {
@@ -277,11 +278,13 @@ func main() {
 		CookieDomains:  cookieDomains,
 		CookieSecure:   *cookieSecure,
 
+		InsecureCertificates: *insecureCertificates,
+
 		Domain:    domain,
 		Whitelist: whitelist,
 
 		Prompt:           *prompt,
-		UmaAuthorization: *umaAuthorization,
+		UMAAuthorization: *umaAuthorization,
 	}
 
 	// Attach handler
