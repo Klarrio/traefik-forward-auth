@@ -188,6 +188,9 @@ func (f *ForwardAuth) VerifyAccess(token string) (bool, error) {
 
 	// status code is 403 when not allowed by authorization server
 	isAllowedAccess := err == nil && res.StatusCode == 200
+
+	defer res.Body.Close()
+
 	return isAllowedAccess, err
 }
 
