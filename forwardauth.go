@@ -165,9 +165,8 @@ func (f *ForwardAuth) ExchangeCode(r *http.Request, code string) (string, error)
 	return token.Token, err
 }
 
-// Verifies whether access is allowed to all resources of the client using the UMA protocol.
+// VerifyAccess checks whether access is allowed to all resources of the client using the UMA protocol.
 // https://www.keycloak.org/docs/4.8/authorization_services/index.html#_service_obtaining_permissions
-
 func (f *ForwardAuth) VerifyAccess(token string) (bool, error) {
 	// allow self-signed certs
 	client := http.Client{
@@ -179,11 +178,12 @@ func (f *ForwardAuth) VerifyAccess(token string) (bool, error) {
 	data := url.Values{}
 	data.Set("grant_type", "urn:ietf:params:oauth:grant-type:uma-ticket")
 	data.Set("audience", fw.ClientId)
+	encoded := data.Encode()
 
-	req, err := http.NewRequest(http.MethodPost, fw.TokenURL.String(), strings.NewReader(data.Encode()))
+	req, err := http.NewRequest(http.MethodPost, fw.TokenURL.String(), strings.NewReader(encoded))
 	req.Header.Add("Authorization", "Bearer "+token)
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Add("Content-Length", strconv.Itoa(len(data.Encode())))
+	req.Header.Add("Content-Length", fmt.Sprintf("%d", len(encoded)))
 	res, err := client.Do(req)
 
 	// status code is 403 when not allowed by authorization server
