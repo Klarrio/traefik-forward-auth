@@ -37,10 +37,13 @@ type ForwardAuth struct {
 	CSRFCookieName string
 	CookieSecure   bool
 
+	InsecureCertificates bool
+
 	Domain    []string
 	Whitelist []string
 
-	Prompt string
+	Prompt           string
+	UMAAuthorization bool
 }
 
 // Request Validation
@@ -145,10 +148,10 @@ func (f *ForwardAuth) ExchangeCode(r *http.Request, code string) (string, error)
 	form.Set("redirect_uri", f.redirectUri(r))
 	form.Set("code", code)
 
-	// allow self-signed certs
+	// allow insecure certificates when enabled
 	client := http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: f.InsecureCertificates},
 		},
 	}
 
@@ -162,6 +165,35 @@ func (f *ForwardAuth) ExchangeCode(r *http.Request, code string) (string, error)
 	err = json.NewDecoder(res.Body).Decode(&token)
 
 	return token.Token, err
+}
+
+// VerifyAccess checks whether access is allowed to all resources of the client using the UMA protocol.
+// https://www.keycloak.org/docs/4.8/authorization_services/index.html#_service_obtaining_permissions
+func (f *ForwardAuth) VerifyAccess(token string) (bool, error) {
+	// allow insecure certificates when enabled
+	client := http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: f.InsecureCertificates},
+		},
+	}
+
+	data := url.Values{}
+	data.Set("grant_type", "urn:ietf:params:oauth:grant-type:uma-ticket")
+	data.Set("audience", fw.ClientId)
+	encoded := data.Encode()
+
+	req, err := http.NewRequest(http.MethodPost, fw.TokenURL.String(), strings.NewReader(encoded))
+	req.Header.Add("Authorization", "Bearer "+token)
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Add("Content-Length", fmt.Sprintf("%d", len(encoded)))
+	res, err := client.Do(req)
+
+	// status code is 403 when not allowed by authorization server
+	isAllowedAccess := err == nil && res.StatusCode == 200
+
+	defer res.Body.Close()
+
+	return isAllowedAccess, err
 }
 
 // Get user with token
@@ -178,7 +210,7 @@ func (f *ForwardAuth) GetUser(token string) (User, error) {
 
 	client := &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: f.InsecureCertificates},
 		},
 	}
 	req, err := http.NewRequest("GET", fw.UserURL.String(), nil)

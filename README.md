@@ -80,11 +80,13 @@ The following configuration is supported:
 |-cookie-name|string|Cookie Name (default "_forward_auth")|
 |-cookie-secure|bool|Use secure cookies (default true)|
 |-csrf-cookie-name|string|CSRF Cookie Name (default "_forward_auth_csrf")|
+|-insecure-certificates|bool|Allow insecure certificates (default false)|
 |-domain|string|Comma separated list of email domains to allow|
 |-whitelist|string|Comma separated list of email addresses to allow|
 |-lifetime|int|Session length in seconds (default 43200)|
 |-url-path|string|Callback URL (default "_oauth")|
 |-prompt|string|Space separated list of [OpenID prompt options](https://developers.google.com/identity/protocols/OpenIDConnect#prompt)|
+|-uma_authorization|bool|whether [UMA](https://docs.kantarainitiative.org/uma/wg/oauth-uma-grant-2.0-05.html)-based authorization will be performed (default false)|
 |-log-level|string|Log level: trace, debug, info, warn, error, fatal, panic (default "warn")|
 |-log-format|string|Log format: text, json, pretty (default "text")|
 
