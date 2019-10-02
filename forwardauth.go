@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// Forward Auth
+// ForwardAuth represents forward autheentication object
 type ForwardAuth struct {
 	Path     string
 	Lifetime time.Duration
@@ -31,6 +31,9 @@ type ForwardAuth struct {
 	UserURL  *url.URL
 
 	AuthHost string
+
+	BearerCookieName  string
+	BearerCookieInUse bool
 
 	CookieName     string
 	CookieDomains  []CookieDomain
@@ -276,13 +279,13 @@ func (f *ForwardAuth) useAuthDomain(r *http.Request) (bool, string) {
 // Cookie methods
 
 // Create an auth cookie
-func (f *ForwardAuth) MakeCookie(r *http.Request, email string) *http.Cookie {
+func (f *ForwardAuth) MakeCookie(r *http.Request, name, content string) *http.Cookie {
 	expires := f.cookieExpiry()
-	mac := f.cookieSignature(r, email, fmt.Sprintf("%d", expires.Unix()))
-	value := fmt.Sprintf("%s|%d|%s", mac, expires.Unix(), email)
+	mac := f.cookieSignature(r, content, fmt.Sprintf("%d", expires.Unix()))
+	value := fmt.Sprintf("%s|%d|%s", mac, expires.Unix(), content)
 
 	return &http.Cookie{
-		Name:     f.CookieName,
+		Name:     name,
 		Value:    value,
 		Path:     "/",
 		Domain:   f.cookieDomain(r),

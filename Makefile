@@ -1,5 +1,7 @@
-
+.PHONY: format
 format:
 	gofmt -w -s *.go
 
-.PHONY: format
+.PHONY: test
+test:
+	go test -v .

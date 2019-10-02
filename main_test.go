@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"time"
+
 	// "reflect"
 	"io/ioutil"
 	"net/http"
@@ -113,30 +114,30 @@ func TestHandler(t *testing.T) {
 	// Should catch invalid cookie
 	req = newHttpRequest("foo")
 
-	c := fw.MakeCookie(req, "test@example.com")
+	c := fw.MakeCookie(req, fw.CookieName, "test@example.com")
 	parts := strings.Split(c.Value, "|")
 	c.Value = fmt.Sprintf("bad|%s|%s", parts[1], parts[2])
 
 	res, _ = httpRequest(req, c)
 	if res.StatusCode != 401 {
-		t.Error("Request with invalid cookie shound't be authorised", res.StatusCode)
+		t.Error("Request with invalid cookie shouldn't be authorised", res.StatusCode)
 	}
 
 	// Should validate email
 	req = newHttpRequest("foo")
 
-	c = fw.MakeCookie(req, "test@example.com")
+	c = fw.MakeCookie(req, fw.CookieName, "test@example.com")
 	fw.Domain = []string{"test.com"}
 
 	res, _ = httpRequest(req, c)
 	if res.StatusCode != 401 {
-		t.Error("Request with invalid cookie shound't be authorised", res.StatusCode)
+		t.Error("Request with invalid cookie shouldn't be authorised", res.StatusCode)
 	}
 
 	// Should allow valid request email
 	req = newHttpRequest("foo")
 
-	c = fw.MakeCookie(req, "test@example.com")
+	c = fw.MakeCookie(req, fw.CookieName, "test@example.com")
 	fw.Domain = []string{}
 
 	res, _ = httpRequest(req, c)
@@ -185,7 +186,7 @@ func TestCallback(t *testing.T) {
 	req := newHttpRequest("_oauth")
 	res, _ := httpRequest(req, nil)
 	if res.StatusCode != 401 {
-		t.Error("Auth callback without cookie shound't be authorised, got:", res.StatusCode)
+		t.Error("Auth callback without cookie shouldn't be authorised, got:", res.StatusCode)
 	}
 
 	// Should catch invalid csrf cookie
