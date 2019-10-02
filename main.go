@@ -28,19 +28,19 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	})
 	logger.WithFields(logrus.Fields{
 		"Headers": r.Header,
-	}).Debugf("Handling request")
+	}).Debug("Handling request")
 
 	// Parse uri
 	uri, err := url.Parse(r.Header.Get("X-Forwarded-Uri"))
 	if err != nil {
-		logger.Errorf("Error parsing X-Forwarded-Uri, %v", err)
+		logger.Error("Error parsing X-Forwarded-Uri, ", err)
 		http.Error(w, "Service unavailable", 503)
 		return
 	}
 
 	// Handle callback
 	if uri.Path == fw.Path {
-		logger.Debugf("Passing request to auth callback")
+		logger.Debug("Passing request to auth callback")
 		handleCallback(w, r, uri.Query(), logger)
 		return
 	}
@@ -56,7 +56,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	if !emailValid {
 		logger.WithFields(logrus.Fields{
 			"email": email,
-		}).Errorf("Invalid email")
+		}).Error("Invalid email")
 		http.Error(w, "Not authorized", 401)
 		return
 	}
@@ -71,7 +71,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Valid request
-	logger.Debugf("Allowing valid request ")
+	logger.Debug("Allowing valid request")
 	w.Header().Set("X-Forwarded-User", email)
 	w.WriteHeader(200)
 }
@@ -94,7 +94,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 		logger.WithFields(logrus.Fields{
 			"csrf":  csrfCookie.Value,
 			"state": state,
-		}).Warnf("Error validating csrf cookie: %v", err)
+		}).Warn("Error validating csrf cookie: ", err)
 		http.Error(w, "Not authorized", 401)
 		return
 	}
@@ -105,7 +105,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 	// Exchange code for token
 	token, err := fw.ExchangeCode(r, qs.Get("code"))
 	if err != nil {
-		logger.Errorf("Code exchange failed with: %v", err)
+		logger.Error("Code exchange failed with: ", err)
 		http.Error(w, "Service unavailable", 503)
 		return
 	}
@@ -113,12 +113,12 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 	if fw.UMAAuthorization {
 		isAllowedAccess, err := fw.VerifyAccess(token)
 		if err != nil {
-			logger.Errorf("Access verification failed with: %v", err)
+			logger.Error("Access verification failed with: ", err)
 			http.Error(w, "Service unavailable", 503)
 			return
 		}
 		if !isAllowedAccess {
-			logger.Infof("Not authorized")
+			logger.Info("Not authorized")
 			http.Error(w, "Not authorized", 401)
 			return
 		}
@@ -140,7 +140,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 		http.SetCookie(w, fw.MakeCookie(r, fw.BearerCookieName, token))
 		logFields["bearer-token-length"] = len(token)
 	}
-	logger.WithFields(logFields).Infof("Generated auth cookie")
+	logger.WithFields(logFields).Info("Generated auth cookie")
 
 	// Redirect
 	http.Redirect(w, r, redirect, http.StatusTemporaryRedirect)
@@ -156,7 +156,7 @@ func getValidCookieOrHandleRedirect(cookieName, uriPath string, logger *logrus.E
 		// Error indicates no cookie, generate nonce
 		err, nonce := fw.Nonce()
 		if err != nil {
-			logger.Errorf("Error generating nonce, %v", err)
+			logger.Error("Error generating nonce: ", err)
 			http.Error(w, "Service unavailable", 503)
 			return handled(true), content
 		}
@@ -175,7 +175,7 @@ func getValidCookieOrHandleRedirect(cookieName, uriPath string, logger *logrus.E
 	// Validate cookie
 	valid, content, err := fw.ValidateCookie(r, c)
 	if !valid {
-		logger.Errorf("Invalid cookie: %v", err)
+		logger.Error("Invalid cookie: ", err)
 		http.Error(w, "Not authorized", 401)
 		return handled(true), content
 	}
@@ -186,7 +186,7 @@ func getValidCookieOrHandleRedirect(cookieName, uriPath string, logger *logrus.E
 func getOidcConfig(oidc string, insecureCertificates bool) map[string]interface{} {
 	uri, err := url.Parse(oidc)
 	if err != nil {
-		log.Fatalf("failed to parse oidc string: %s", err)
+		log.Fatal("failed to parse oidc string: ", err)
 	}
 	uri.Path = path.Join(uri.Path, "/.well-known/openid-configuration")
 
@@ -199,12 +199,12 @@ func getOidcConfig(oidc string, insecureCertificates bool) map[string]interface{
 
 	res, err := client.Get(uri.String())
 	if err != nil {
-		log.Fatalf("failed to get oidc parametere from oidc connect: %s", err)
+		log.Fatal("failed to get oidc parametere from oidc connect: ", err)
 	}
 	defer res.Body.Close()
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		log.Fatalf("failed to read response body: %s", err)
+		log.Fatal("failed to read response body: ", err)
 	}
 	var result map[string]interface{}
 	json.Unmarshal(body, &result)
@@ -257,16 +257,16 @@ func main() {
 
 	loginURL, err := url.Parse((oidcParams["authorization_endpoint"].(string)))
 	if err != nil {
-		log.Fatalf("unable to parse login url: %s", err)
+		log.Fatal("unable to parse login url: ", err)
 	}
 
 	tokenURL, err := url.Parse((oidcParams["token_endpoint"].(string)))
 	if err != nil {
-		log.Fatalf("unable to parse token url: %s", err)
+		log.Fatal("unable to parse token url: ", err)
 	}
 	userURL, err := url.Parse((oidcParams["userinfo_endpoint"].(string)))
 	if err != nil {
-		log.Fatalf("unable to parse user url: %s", err)
+		log.Fatal("unable to parse user url: ", err)
 	}
 
 	// Parse lists
@@ -324,7 +324,7 @@ func main() {
 
 	// Start
 	jsonConf, _ := json.Marshal(fw)
-	log.Debugf("Starting with options: %s", string(jsonConf))
+	log.Debug("Starting with options: ", string(jsonConf))
 	log.Info("Listening on :4181")
 	log.Info(http.ListenAndServe(":4181", nil))
 }
