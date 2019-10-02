@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -44,45 +45,29 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get auth cookie
-	c, err := r.Cookie(fw.CookieName)
-	if err != nil {
-		// Error indicates no cookie, generate nonce
-		err, nonce := fw.Nonce()
-		if err != nil {
-			logger.Errorf("Error generating nonce, %v", err)
-			http.Error(w, "Service unavailable", 503)
-			return
-		}
-
-		// Set the CSRF cookie
-		http.SetCookie(w, fw.MakeCSRFCookie(r, nonce))
-		logger.Debug("Set CSRF cookie and redirecting to oidc login")
-		logger.Debug("uri.Path was %s", uri.Path)
-		logger.Debug("fw.Path was %s", fw.Path)
-
-		// Forward them on
-		http.Redirect(w, r, fw.GetLoginURL(r, nonce), http.StatusTemporaryRedirect)
-
-		return
-	}
-
-	// Validate cookie
-	valid, email, err := fw.ValidateCookie(r, c)
-	if !valid {
-		logger.Errorf("Invalid cookie: %v", err)
-		http.Error(w, "Not authorized", 401)
+	isHandled, email := getValidCookieOrHandleRedirect(fw.CookieName, uri.Path, logger, w, r)
+	if isHandled == handled(true) {
+		// cookie did not validate or there was no cookie, it's already handled
 		return
 	}
 
 	// Validate user
-	valid = fw.ValidateEmail(email)
-	if !valid {
+	emailValid := fw.ValidateEmail(email)
+	if !emailValid {
 		logger.WithFields(logrus.Fields{
 			"email": email,
 		}).Errorf("Invalid email")
 		http.Error(w, "Not authorized", 401)
 		return
+	}
+
+	if fw.BearerCookieInUse {
+		isHandled, bearerToken := getValidCookieOrHandleRedirect(fw.BearerCookieName, uri.Path, logger, w, r)
+		if isHandled == handled(true) {
+			// cookie did not validate or there was no cookie, it's already handled
+			return
+		}
+		w.Header().Set("X-Forwarded-Access-Token", base64.StdEncoding.EncodeToString([]byte(bearerToken)))
 	}
 
 	// Valid request
@@ -147,13 +132,55 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 	}
 
 	// Generate cookie
-	http.SetCookie(w, fw.MakeCookie(r, user.Email))
-	logger.WithFields(logrus.Fields{
+	http.SetCookie(w, fw.MakeCookie(r, fw.CookieName, user.Email))
+	logFields := logrus.Fields{
 		"user": user.Email,
-	}).Infof("Generated auth cookie")
+	}
+	if fw.BearerCookieInUse {
+		http.SetCookie(w, fw.MakeCookie(r, fw.BearerCookieName, token))
+		logFields["bearer-token-length"] = len(token)
+	}
+	logger.WithFields(logFields).Infof("Generated auth cookie")
 
 	// Redirect
 	http.Redirect(w, r, redirect, http.StatusTemporaryRedirect)
+}
+
+type handled bool
+
+func getValidCookieOrHandleRedirect(cookieName, uriPath string, logger *logrus.Entry, w http.ResponseWriter, r *http.Request) (handled, string) {
+	// Get the cookie
+	var content string
+	c, err := r.Cookie(cookieName)
+	if err != nil {
+		// Error indicates no cookie, generate nonce
+		err, nonce := fw.Nonce()
+		if err != nil {
+			logger.Errorf("Error generating nonce, %v", err)
+			http.Error(w, "Service unavailable", 503)
+			return handled(true), content
+		}
+
+		// Set the CSRF cookie
+		http.SetCookie(w, fw.MakeCSRFCookie(r, nonce))
+		logger.Debug("Set CSRF cookie and redirecting to oidc login")
+		logger.Debug("uri.Path was ", uriPath)
+		logger.Debug("fw.Path was ", fw.Path)
+
+		// Forward them on
+		http.Redirect(w, r, fw.GetLoginURL(r, nonce), http.StatusTemporaryRedirect)
+		return handled(true), content
+	}
+
+	// Validate cookie
+	valid, content, err := fw.ValidateCookie(r, c)
+	if !valid {
+		logger.Errorf("Invalid cookie: %v", err)
+		http.Error(w, "Not authorized", 401)
+		return handled(true), content
+	}
+
+	return handled(false), content
 }
 
 func getOidcConfig(oidc string, insecureCertificates bool) map[string]interface{} {
@@ -196,6 +223,8 @@ func main() {
 	oidcIssuer := flag.String("oidc-issuer", "", "OIDC Issuer URL (required)")
 	clientId := flag.String("client-id", "", "Client ID (required)")
 	clientSecret := flag.String("client-secret", "", "Client Secret (required)")
+	bearerCookieName := flag.String("bearer-cookie-name", "_forward_auth_bt", "Bearer Token Cookie Name")
+	bearerCookieInUse := flag.Bool("bearer-cookie-enabled", false, "If false, no bearer cookie will be set or validated")
 	cookieName := flag.String("cookie-name", "_forward_auth", "Cookie Name")
 	cSRFCookieName := flag.String("csrf-cookie-name", "_forward_auth_csrf", "CSRF Cookie Name")
 	cookieDomainList := flag.String("cookie-domains", "", "Comma separated list of cookie domains") //todo
@@ -272,6 +301,9 @@ func main() {
 		LoginURL: loginURL,
 		TokenURL: tokenURL,
 		UserURL:  userURL,
+
+		BearerCookieName:  *bearerCookieName,
+		BearerCookieInUse: *bearerCookieInUse,
 
 		CookieName:     *cookieName,
 		CSRFCookieName: *cSRFCookieName,

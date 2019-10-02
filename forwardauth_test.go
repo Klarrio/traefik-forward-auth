@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const cookieName = "testCookie"
+
 func TestValidateCookie(t *testing.T) {
 	fw = &ForwardAuth{}
 	r, _ := http.NewRequest("GET", "http://example.com", nil)
@@ -40,7 +42,7 @@ func TestValidateCookie(t *testing.T) {
 
 	// Should catch expired
 	fw.Lifetime = time.Second * time.Duration(-1)
-	c = fw.MakeCookie(r, "test@test.com")
+	c = fw.MakeCookie(r, cookieName, "test@test.com")
 	valid, _, err = fw.ValidateCookie(r, c)
 	if valid || err.Error() != "Cookie has expired" {
 		t.Error("Should get \"Cookie has expired\", got:", err)
@@ -48,7 +50,7 @@ func TestValidateCookie(t *testing.T) {
 
 	// Should accept valid cookie
 	fw.Lifetime = time.Second * time.Duration(10)
-	c = fw.MakeCookie(r, "test@test.com")
+	c = fw.MakeCookie(r, cookieName, "test@test.com")
 	valid, email, err := fw.ValidateCookie(r, c)
 	if !valid {
 		t.Error("Valid request should return as valid")
