@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -36,7 +37,7 @@ func TestValidateCookie(t *testing.T) {
 	// Should catch invalid mac
 	c.Value = "MQ==|2|3"
 	valid, _, err = fw.ValidateCookie(r, c)
-	if valid || err.Error() != "Invalid cookie mac" {
+	if valid || !strings.HasPrefix(err.Error(), "Invalid cookie mac") {
 		t.Error("Should get \"Invalid cookie mac\", got:", err)
 	}
 
