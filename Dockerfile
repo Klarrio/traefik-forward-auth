@@ -14,4 +14,4 @@ LABEL org.label-schema.build-date=$BUILD_DATE \
 RUN apk update && apk add ca-certificates tzdata && rm -rf /var/cache/apk/*
 RUN update-ca-certificates
 COPY traefik-forward-auth-linux /go/bin/
-ENTRYPOINT ["./traefik-forward-auth-linux"]
+ENTRYPOINT ["/go/bin/traefik-forward-auth-linux"]
