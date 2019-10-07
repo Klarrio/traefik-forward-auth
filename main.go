@@ -72,7 +72,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bearerToken, err := bearerTokenFromWire([]byte(tokenFromMapItem))
+	bearerToken, err := bearerTokenFromWire(tokenFromMapItem)
 	if err != nil {
 		logger.Error("Error parsing stored token, reason ", err)
 		http.Error(w, "Internal server error", 500)
@@ -151,7 +151,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 		return
 	}
 
-	bearerToken, err := bearerTokenFromWire([]byte(token))
+	bearerToken, err := bearerTokenFromWire(token)
 	if err != nil {
 		logger.Error("Error parsing bearer token: ", err)
 		http.Error(w, "Bad request", 400)
