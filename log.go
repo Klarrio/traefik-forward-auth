@@ -6,6 +6,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// CreateLogger creates and configures a logrus logger.
 func CreateLogger(logLevel, logFormat string) logrus.FieldLogger {
 	// Setup logger
 	log := logrus.StandardLogger()

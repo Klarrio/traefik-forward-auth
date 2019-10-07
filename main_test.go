@@ -59,7 +59,7 @@ func httpRequest(r *http.Request, c *http.Cookie) (*http.Response, string) {
 	return res, string(body)
 }
 
-func newHttpRequest(uri string) *http.Request {
+func newHTTPRequest(uri string) *http.Request {
 	r := httptest.NewRequest("", "http://example.com", nil)
 	r.Header.Add("X-Forwarded-Uri", uri)
 	return r
@@ -88,7 +88,7 @@ func qsDiff(one, two url.Values) {
 func TestHandler(t *testing.T) {
 	fw = &ForwardAuth{
 		Path:         "_oauth",
-		ClientId:     "idtest",
+		ClientID:     "idtest",
 		ClientSecret: "sectest",
 		Scope:        "scopetest",
 		LoginURL: &url.URL{
@@ -101,7 +101,7 @@ func TestHandler(t *testing.T) {
 	}
 
 	// Should redirect vanilla request to login url
-	req := newHttpRequest("foo")
+	req := newHTTPRequest("foo")
 	res, _ := httpRequest(req, nil)
 	if res.StatusCode != 307 {
 		t.Error("Vanilla request should be redirected with 307, got:", res.StatusCode)
@@ -112,7 +112,7 @@ func TestHandler(t *testing.T) {
 	}
 
 	// Should catch invalid cookie
-	req = newHttpRequest("foo")
+	req = newHTTPRequest("foo")
 
 	c := fw.MakeCookie(req, fw.CookieName, "test@example.com")
 	parts := strings.Split(c.Value, "|")
@@ -124,7 +124,7 @@ func TestHandler(t *testing.T) {
 	}
 
 	// Should validate email
-	req = newHttpRequest("foo")
+	req = newHTTPRequest("foo")
 
 	c = fw.MakeCookie(req, fw.CookieName, "test@example.com")
 	fw.Domain = []string{"test.com"}
@@ -135,7 +135,7 @@ func TestHandler(t *testing.T) {
 	}
 
 	// Should allow valid request email
-	req = newHttpRequest("foo")
+	req = newHTTPRequest("foo")
 
 	c = fw.MakeCookie(req, fw.CookieName, "test@example.com")
 	fw.Domain = []string{}
@@ -157,7 +157,7 @@ func TestHandler(t *testing.T) {
 func TestCallback(t *testing.T) {
 	fw = &ForwardAuth{
 		Path:         "_oauth",
-		ClientId:     "idtest",
+		ClientID:     "idtest",
 		ClientSecret: "sectest",
 		Scope:        "scopetest",
 		LoginURL: &url.URL{
@@ -172,25 +172,25 @@ func TestCallback(t *testing.T) {
 	tokenServerHandler := &TokenServerHandler{}
 	tokenServer := httptest.NewServer(tokenServerHandler)
 	defer tokenServer.Close()
-	tokenUrl, _ := url.Parse(tokenServer.URL)
-	fw.TokenURL = tokenUrl
+	tokenURL, _ := url.Parse(tokenServer.URL)
+	fw.TokenURL = tokenURL
 
 	// Setup user server
 	userServerHandler := &UserServerHandler{}
 	userServer := httptest.NewServer(userServerHandler)
 	defer userServer.Close()
-	userUrl, _ := url.Parse(userServer.URL)
-	fw.UserURL = userUrl
+	userURL, _ := url.Parse(userServer.URL)
+	fw.UserURL = userURL
 
 	// Should pass auth response request to callback
-	req := newHttpRequest("_oauth")
+	req := newHTTPRequest("_oauth")
 	res, _ := httpRequest(req, nil)
 	if res.StatusCode != 401 {
 		t.Error("Auth callback without cookie shouldn't be authorised, got:", res.StatusCode)
 	}
 
 	// Should catch invalid csrf cookie
-	req = newHttpRequest("_oauth?state=12345678901234567890123456789012:http://redirect")
+	req = newHTTPRequest("_oauth?state=12345678901234567890123456789012:http://redirect")
 	c := fw.MakeCSRFCookie(req, "nononononononononononononononono")
 	res, _ = httpRequest(req, c)
 	if res.StatusCode != 401 {
@@ -198,7 +198,7 @@ func TestCallback(t *testing.T) {
 	}
 
 	// Should redirect valid request
-	req = newHttpRequest("_oauth?state=12345678901234567890123456789012:http://redirect")
+	req = newHTTPRequest("_oauth?state=12345678901234567890123456789012:http://redirect")
 	c = fw.MakeCSRFCookie(req, "12345678901234567890123456789012")
 	res, _ = httpRequest(req, c)
 	if res.StatusCode != 307 {

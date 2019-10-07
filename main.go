@@ -262,7 +262,7 @@ func main() {
 	secret := flag.String("secret", "", "*Secret used for signing (required)")
 	authHost := flag.String("auth-host", "", "Central auth login")
 	oidcIssuer := flag.String("oidc-issuer", "", "OIDC Issuer URL (required)")
-	clientId := flag.String("client-id", "", "Client ID (required)")
+	clientID := flag.String("client-id", "", "Client ID (required)")
 	clientSecret := flag.String("client-secret", "", "Client Secret (required)")
 	cookieName := flag.String("cookie-name", "_forward_auth", "Cookie Name")
 	cSRFCookieName := flag.String("csrf-cookie-name", "_forward_auth_csrf", "CSRF Cookie Name")
@@ -288,7 +288,7 @@ func main() {
 	}
 
 	// Check for show stopper errors
-	if *clientId == "" || *clientSecret == "" || *secret == "" || *oidcIssuer == "" {
+	if *clientID == "" || *clientSecret == "" || *secret == "" || *oidcIssuer == "" {
 		log.Fatal("client-id, client-secret, secret and oidc-issuer must all be set")
 	}
 
@@ -339,7 +339,7 @@ func main() {
 		Secret:   []byte(*secret),
 		AuthHost: *authHost,
 
-		ClientId:     *clientId,
+		ClientID:     *clientID,
 		ClientSecret: *clientSecret,
 		Scope:        "openid profile email",
 

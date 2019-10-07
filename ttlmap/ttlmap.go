@@ -5,14 +5,16 @@ import (
 	"time"
 )
 
+// TTLMap represents a map with key expiry.
 type TTLMap interface {
 	Add(key interface{}, value interface{})
 	AddWithTTL(key interface{}, value interface{}, ttl time.Duration)
-	Get(key interface{}) (TTLMapItem, bool)
-	Remove(key interface{}) (TTLMapItem, bool)
+	Get(key interface{}) (Item, bool)
+	Remove(key interface{}) (Item, bool)
 }
 
-type TTLMapItem interface {
+// Item represents a map item for the TTL map.
+type Item interface {
 	Value() interface{}
 	ExpiresAt() time.Time
 }
@@ -53,7 +55,7 @@ type opAdd struct {
 }
 
 type opFetchResult struct {
-	item    TTLMapItem
+	item    Item
 	existed bool
 }
 
@@ -119,7 +121,7 @@ func (m *ttlMap) AddWithTTL(key interface{}, value interface{}, ttl time.Duratio
 }
 
 // Get fetches the item for the key. The result is a valid item when the boolean is true.
-func (m *ttlMap) Get(key interface{}) (TTLMapItem, bool) {
+func (m *ttlMap) Get(key interface{}) (Item, bool) {
 	op := &opGet{
 		key:        key,
 		chanResult: make(chan *opFetchResult, 1),
@@ -135,7 +137,7 @@ func (m *ttlMap) Get(key interface{}) (TTLMapItem, bool) {
 // Remove removes the key from the map.
 // The boolean value indicates if the key was removed.
 // If the key was removed, the removed item is returned to the caller.
-func (m *ttlMap) Remove(key interface{}) (TTLMapItem, bool) {
+func (m *ttlMap) Remove(key interface{}) (Item, bool) {
 	op := &opRemove{
 		key:          key,
 		chanResponse: make(chan *opFetchResult, 1),

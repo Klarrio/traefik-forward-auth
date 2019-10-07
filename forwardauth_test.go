@@ -107,7 +107,7 @@ func TestGetLoginURL(t *testing.T) {
 
 	fw = &ForwardAuth{
 		Path:         "/_oauth",
-		ClientId:     "idtest",
+		ClientID:     "idtest",
 		ClientSecret: "sectest",
 		Scope:        "scopetest",
 		LoginURL: &url.URL{
@@ -153,7 +153,7 @@ func TestGetLoginURL(t *testing.T) {
 	fw = &ForwardAuth{
 		Path:         "/_oauth",
 		AuthHost:     "auth.example.com",
-		ClientId:     "idtest",
+		ClientID:     "idtest",
 		ClientSecret: "sectest",
 		Scope:        "scopetest",
 		LoginURL: &url.URL{
@@ -201,7 +201,7 @@ func TestGetLoginURL(t *testing.T) {
 	fw = &ForwardAuth{
 		Path:         "/_oauth",
 		AuthHost:     "auth.example.com",
-		ClientId:     "idtest",
+		ClientID:     "idtest",
 		ClientSecret: "sectest",
 		Scope:        "scopetest",
 		LoginURL: &url.URL{
