@@ -5,7 +5,14 @@ import (
 	"time"
 )
 
-type ttlMapItem interface {
+type TTLMap interface {
+	Add(key interface{}, value interface{})
+	AddWithTTL(key interface{}, value interface{}, ttl time.Duration)
+	Get(key interface{}) (TTLMapItem, bool)
+	Remove(key interface{}) (TTLMapItem, bool)
+}
+
+type TTLMapItem interface {
 	Value() interface{}
 	ExpiresAt() time.Time
 }
@@ -46,7 +53,7 @@ type opAdd struct {
 }
 
 type opFetchResult struct {
-	item    ttlMapItem
+	item    TTLMapItem
 	existed bool
 }
 
@@ -69,7 +76,7 @@ type ttlMap struct {
 // New creates a new TTLMap with the default TTL.
 // The default TTL is 60 seconds or a value defined using TTL_MAP_DEFAULT_TTL environment variable.
 // The value of the TTL_MAP_DEFAULT_TTL environment variable has to be a valid golang duration string.
-func New() (*ttlMap, error) {
+func New() (TTLMap, error) {
 	defaultTTL := time.Duration(time.Second * 60)
 	if val, ok := os.LookupEnv("TTL_MAP_DEFAULT_TTL"); ok {
 		d, err := time.ParseDuration(val)
@@ -82,7 +89,7 @@ func New() (*ttlMap, error) {
 }
 
 // NewWithTTL creates a new TTLMap with the specified default TTL duration.
-func NewWithTTL(ttl time.Duration) *ttlMap {
+func NewWithTTL(ttl time.Duration) TTLMap {
 	return &ttlMap{
 		defaultTTL: ttl,
 		chanOp:     make(chan interface{}),
@@ -112,7 +119,7 @@ func (m *ttlMap) AddWithTTL(key interface{}, value interface{}, ttl time.Duratio
 }
 
 // Get fetches the item for the key. The result is a valid item when the boolean is true.
-func (m *ttlMap) Get(key interface{}) (ttlMapItem, bool) {
+func (m *ttlMap) Get(key interface{}) (TTLMapItem, bool) {
 	op := &opGet{
 		key:        key,
 		chanResult: make(chan *opFetchResult, 1),
@@ -128,7 +135,7 @@ func (m *ttlMap) Get(key interface{}) (ttlMapItem, bool) {
 // Remove removes the key from the map.
 // The boolean value indicates if the key was removed.
 // If the key was removed, the removed item is returned to the caller.
-func (m *ttlMap) Remove(key interface{}) (ttlMapItem, bool) {
+func (m *ttlMap) Remove(key interface{}) (TTLMapItem, bool) {
 	op := &opRemove{
 		key:          key,
 		chanResponse: make(chan *opFetchResult, 1),

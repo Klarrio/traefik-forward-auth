@@ -1,4 +1,4 @@
-module github.com/funkypenguin/traefik-forward-auth
+module gitlab.com/Klarrio/traefik-forward-auth
 
 go 1.12
 

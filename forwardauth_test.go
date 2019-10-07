@@ -374,12 +374,12 @@ func TestValidateCSRFCookie(t *testing.T) {
 func TestNonce(t *testing.T) {
 	fw = &ForwardAuth{}
 
-	err, nonce1 := fw.Nonce()
+	nonce1, err := fw.Nonce()
 	if err != nil {
 		t.Error("Error generation nonce:", err)
 	}
 
-	err, nonce2 := fw.Nonce()
+	nonce2, err := fw.Nonce()
 	if err != nil {
 		t.Error("Error generation nonce:", err)
 	}

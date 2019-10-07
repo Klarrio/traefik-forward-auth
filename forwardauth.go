@@ -16,6 +16,10 @@ import (
 	"time"
 )
 
+const (
+	defaultNonceSize = 16
+)
+
 // ForwardAuth represents forward autheentication object
 type ForwardAuth struct {
 	Path     string
@@ -31,9 +35,6 @@ type ForwardAuth struct {
 	UserURL  *url.URL
 
 	AuthHost string
-
-	BearerCookieName  string
-	BearerCookieInUse bool
 
 	CookieName     string
 	CookieDomains  []CookieDomain
@@ -278,12 +279,26 @@ func (f *ForwardAuth) useAuthDomain(r *http.Request) (bool, string) {
 
 // Cookie methods
 
-// Create an auth cookie
+// ClearCSRFCookie sets a cookie to clear previous CSRF cookie.
+func (f *ForwardAuth) ClearCSRFCookie(r *http.Request) *http.Cookie {
+	return f.MakeCookieWithExpiry(r, f.CSRFCookieName, "", time.Now().Local().Add(time.Hour*-1))
+}
+
+// MakeCookie creates a cookie of a given name with given content.
+// Uses default cookie expiry.
 func (f *ForwardAuth) MakeCookie(r *http.Request, name, content string) *http.Cookie {
-	expires := f.cookieExpiry()
+	return f.MakeCookieWithExpiry(r, name, content, f.cookieExpiry())
+}
+
+// MakeCSRFCookie creates a CSRF cookie (used during login only)
+func (f *ForwardAuth) MakeCSRFCookie(r *http.Request, nonce string) *http.Cookie {
+	return f.MakeCookieWithExpiry(r, f.CSRFCookieName, nonce, f.cookieExpiry())
+}
+
+// MakeCookieWithExpiry creates a cookie of a given name with given content, with explicit expiry.
+func (f *ForwardAuth) MakeCookieWithExpiry(r *http.Request, name, content string, expires time.Time) *http.Cookie {
 	mac := f.cookieSignature(r, content, fmt.Sprintf("%d", expires.Unix()))
 	value := fmt.Sprintf("%s|%d|%s", mac, expires.Unix(), content)
-
 	return &http.Cookie{
 		Name:     name,
 		Value:    value,
@@ -292,32 +307,6 @@ func (f *ForwardAuth) MakeCookie(r *http.Request, name, content string) *http.Co
 		HttpOnly: true,
 		Secure:   f.CookieSecure,
 		Expires:  expires,
-	}
-}
-
-// Make a CSRF cookie (used during login only)
-func (f *ForwardAuth) MakeCSRFCookie(r *http.Request, nonce string) *http.Cookie {
-	return &http.Cookie{
-		Name:     f.CSRFCookieName,
-		Value:    nonce,
-		Path:     "/",
-		Domain:   f.csrfCookieDomain(r),
-		HttpOnly: true,
-		Secure:   f.CookieSecure,
-		Expires:  f.cookieExpiry(),
-	}
-}
-
-// Create a cookie to clear csrf cookie
-func (f *ForwardAuth) ClearCSRFCookie(r *http.Request) *http.Cookie {
-	return &http.Cookie{
-		Name:     f.CSRFCookieName,
-		Value:    "",
-		Path:     "/",
-		Domain:   f.csrfCookieDomain(r),
-		HttpOnly: true,
-		Secure:   f.CookieSecure,
-		Expires:  time.Now().Local().Add(time.Hour * -1),
 	}
 }
 
@@ -340,15 +329,20 @@ func (f *ForwardAuth) ValidateCSRFCookie(c *http.Cookie, state string) (bool, st
 	return true, state[33:], nil
 }
 
-func (f *ForwardAuth) Nonce() (error, string) {
+// Nonce generates a new random nonce using the default nonce size.
+func (f *ForwardAuth) Nonce() (string, error) {
+	return f.NonceWithSize(defaultNonceSize)
+}
+
+// NonceWithSize generates a new random nonce using the specified size.
+func (f *ForwardAuth) NonceWithSize(size int) (string, error) {
 	// Make nonce
-	nonce := make([]byte, 16)
+	nonce := make([]byte, size)
 	_, err := rand.Read(nonce)
 	if err != nil {
-		return err, ""
+		return "", err
 	}
-
-	return nil, fmt.Sprintf("%x", nonce)
+	return fmt.Sprintf("%x", nonce), nil
 }
 
 // Cookie domain
