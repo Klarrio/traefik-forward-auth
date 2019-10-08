@@ -90,7 +90,6 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	// Valid request
 	logger.Debug("Allowing valid request")
-	// w.Header().Set("X-Forwarded-User", email) // QUESTION: do we need this?
 	w.Header().Set("X-Forwarded-Access-Token", base64.StdEncoding.EncodeToString([]byte(tokenFromMapItem)))
 	w.WriteHeader(200)
 }

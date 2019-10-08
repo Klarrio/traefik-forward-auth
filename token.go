@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -28,10 +29,13 @@ func bearerTokenFromWire(wireMessage string) (*BearerToken, error) {
 	if len(parts) != 3 {
 		return nil, errors.New("invalid JWT token")
 	}
-	payload := parts[1]
+	payloadBytes, base64DecodeError := base64.StdEncoding.DecodeString(parts[1])
+	if base64DecodeError != nil {
+		return nil, base64DecodeError
+	}
 
 	token := &BearerToken{}
-	if err := json.Unmarshal([]byte(payload), token); err != nil {
+	if err := json.Unmarshal([]byte(payloadBytes), token); err != nil {
 		return nil, err
 	}
 	return token, nil
