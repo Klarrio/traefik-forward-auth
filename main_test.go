@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/base64"
 	"fmt"
 	"time"
 
@@ -14,28 +13,40 @@ import (
 	"testing"
 
 	"gitlab.com/Klarrio/traefik-forward-auth/ttlmap"
+
+	"github.com/dgrijalva/jwt-go"
 )
 
 /**
  * Utilities
  */
 
-func getJWTLookAlike(email string) string {
-	exp := time.Now().Add(time.Duration(time.Second * 10)).Unix()
-	payload := fmt.Sprintf(`{"exp": %d, "email": "%s"}`, exp, email)
-	return strings.Join([]string{"alg", base64.StdEncoding.EncodeToString([]byte(payload)), "sig"}, ".")
+func getJWT(t *testing.T, email string) string {
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"exp":   time.Now().Add(time.Duration(time.Second * 10)).Unix(),
+		"email": email,
+	})
+	tokenString, signError := token.SignedString([]byte("a-test-signing-key"))
+	if signError != nil {
+		t.Fatal("Could not sign the JWT token, reason:", signError)
+	}
+	return tokenString
 }
 
-type TokenInvalidUserServerHandler struct{}
+type TokenInvalidUserServerHandler struct {
+	t *testing.T
+}
 
 func (t *TokenInvalidUserServerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprint(w, fmt.Sprintf(`{"access_token":"%s"}`, getJWTLookAlike("test@example.com")))
+	fmt.Fprint(w, fmt.Sprintf(`{"access_token":"%s"}`, getJWT(t.t, "test@example.com")))
 }
 
-type TokenValidUserServerHandler struct{}
+type TokenValidUserServerHandler struct {
+	t *testing.T
+}
 
 func (t *TokenValidUserServerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprint(w, fmt.Sprintf(`{"access_token":"%s"}`, getJWTLookAlike("example@example.com")))
+	fmt.Fprint(w, fmt.Sprintf(`{"access_token":"%s"}`, getJWT(t.t, "example@example.com")))
 }
 
 type UserServerHandler struct{}
@@ -153,7 +164,7 @@ func TestHandler(t *testing.T) {
 	if err != nil {
 		t.Error("Expected the secret key to generate but got", err)
 	}
-	pseudoToken := getJWTLookAlike("test@example.com")
+	pseudoToken := getJWT(t, "test@example.com")
 	fw.stateMap.Add(secureKey, pseudoToken)
 
 	// Should validate email
@@ -201,13 +212,17 @@ func TestCallback(t *testing.T) {
 	}
 
 	// Setup valid user token server
-	tokenValidUserServerHandler := &TokenValidUserServerHandler{}
+	tokenValidUserServerHandler := &TokenValidUserServerHandler{
+		t: t,
+	}
 	tokenValidUserServer := httptest.NewServer(tokenValidUserServerHandler)
 	defer tokenValidUserServer.Close()
 	tokenValidUserURL, _ := url.Parse(tokenValidUserServer.URL)
 
 	// Setup invalid user token server
-	tokenInvalidUserServerHandler := &TokenInvalidUserServerHandler{}
+	tokenInvalidUserServerHandler := &TokenInvalidUserServerHandler{
+		t: t,
+	}
 	tokenInvalidUserServer := httptest.NewServer(tokenInvalidUserServerHandler)
 	defer tokenInvalidUserServer.Close()
 	tokenInvalidUserURL, _ := url.Parse(tokenInvalidUserServer.URL)

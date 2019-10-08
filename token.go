@@ -25,7 +25,12 @@ func bearerTokenFromWire(wireMessage string) (*BearerToken, error) {
 	// we receive a JWT token, the format is:
 	// header.payload.signature
 
-	parts := strings.Split(wireMessage, ".") // TODO: token validation
+	// QUESTION: do we have to validate tokens?
+	// We never accept the token from the user.
+	// token comes from Keycloak, we store it in memory, serve it to the app.
+	// It should be the app's responsibility to validate.
+
+	parts := strings.Split(wireMessage, ".")
 	if len(parts) != 3 {
 		return nil, errors.New("invalid JWT token")
 	}
