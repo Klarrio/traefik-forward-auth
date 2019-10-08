@@ -193,6 +193,31 @@ func TestHandler(t *testing.T) {
 	} else if bearerTokens[0] != pseudoToken {
 		t.Error("X-Forwarded-Access-Token should match test token, got:", bearerTokens[0])
 	}
+
+	// Validate that tokens expire
+	shortLivedSecureKey, err := getSecureKey()
+	if err != nil {
+		t.Error("Expected the secret key to generate but got", err)
+	}
+	fw.stateMap.AddWithTTL(shortLivedSecureKey, pseudoToken, time.Second)
+
+	req = newHTTPRequest("foo")
+	c = fw.MakeCookie(req, fw.CookieName, shortLivedSecureKey)
+	fw.Domain = []string{}
+	res, _ = httpRequest(req, c)
+	if res.StatusCode != 200 {
+		t.Error("Valid request should be allowed before key expiry, got:", res.StatusCode)
+	}
+
+	<-time.After(time.Duration(time.Second * 2))
+
+	req = newHTTPRequest("foo")
+	c = fw.MakeCookie(req, fw.CookieName, shortLivedSecureKey)
+	fw.Domain = []string{}
+	res, _ = httpRequest(req, c)
+	if res.StatusCode != 307 {
+		t.Error("Valid request should be disallowed and redirected to the authentication when key expired, got:", res.StatusCode)
+	}
 }
 
 func TestCallback(t *testing.T) {
