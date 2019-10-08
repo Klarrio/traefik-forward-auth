@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gitlab.com/Klarrio/traefik-forward-auth/ttlmap"
 )
 
 const (
@@ -48,6 +50,8 @@ type ForwardAuth struct {
 
 	Prompt           string
 	UMAAuthorization bool
+
+	stateMap ttlmap.TTLMap
 }
 
 // Request Validation
@@ -289,7 +293,15 @@ func (f *ForwardAuth) useAuthDomain(r *http.Request) (bool, string) {
 
 // ClearCSRFCookie sets a cookie to clear previous CSRF cookie.
 func (f *ForwardAuth) ClearCSRFCookie(r *http.Request) *http.Cookie {
-	return f.MakeCookieWithExpiry(r, f.CSRFCookieName, "", time.Now().Local().Add(time.Hour*-1))
+	return &http.Cookie{
+		Name:     f.CSRFCookieName,
+		Value:    "",
+		Path:     "/",
+		Domain:   f.csrfCookieDomain(r),
+		HttpOnly: true,
+		Secure:   f.CookieSecure,
+		Expires:  time.Now().Local().Add(time.Hour * -1),
+	}
 }
 
 // MakeCookie creates a cookie of a given name with given content.
@@ -300,7 +312,15 @@ func (f *ForwardAuth) MakeCookie(r *http.Request, name, content string) *http.Co
 
 // MakeCSRFCookie creates a CSRF cookie (used during login only)
 func (f *ForwardAuth) MakeCSRFCookie(r *http.Request, nonce string) *http.Cookie {
-	return f.MakeCookieWithExpiry(r, f.CSRFCookieName, nonce, f.cookieExpiry())
+	return &http.Cookie{
+		Name:     f.CSRFCookieName,
+		Value:    nonce,
+		Path:     "/",
+		Domain:   f.csrfCookieDomain(r),
+		HttpOnly: true,
+		Secure:   f.CookieSecure,
+		Expires:  f.cookieExpiry(),
+	}
 }
 
 // MakeCookieWithExpiry creates a cookie of a given name with given content, with explicit expiry.
@@ -391,10 +411,10 @@ func (f *ForwardAuth) matchCookieDomains(domain string) (bool, string) {
 }
 
 // Create cookie hmac
-func (f *ForwardAuth) cookieSignature(r *http.Request, email, expires string) string {
+func (f *ForwardAuth) cookieSignature(r *http.Request, content, expires string) string {
 	hash := hmac.New(sha256.New, f.Secret)
 	hash.Write([]byte(f.cookieDomain(r)))
-	hash.Write([]byte(email))
+	hash.Write([]byte(content))
 	hash.Write([]byte(expires))
 	return base64.URLEncoding.EncodeToString(hash.Sum(nil))
 }

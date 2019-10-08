@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"time"
 
@@ -11,16 +12,30 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"gitlab.com/Klarrio/traefik-forward-auth/ttlmap"
 )
 
 /**
  * Utilities
  */
 
-type TokenServerHandler struct{}
+func getJWTLookAlike(email string) string {
+	exp := time.Now().Add(time.Duration(time.Second * 10)).Unix()
+	payload := fmt.Sprintf(`{"exp": %d, "email": "%s"}`, exp, email)
+	return strings.Join([]string{"alg", base64.StdEncoding.EncodeToString([]byte(payload)), "sig"}, ".")
+}
 
-func (t *TokenServerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprint(w, `{"access_token":"123456789"}`)
+type TokenInvalidUserServerHandler struct{}
+
+func (t *TokenInvalidUserServerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprint(w, fmt.Sprintf(`{"access_token":"%s"}`, getJWTLookAlike("test@example.com")))
+}
+
+type TokenValidUserServerHandler struct{}
+
+func (t *TokenValidUserServerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprint(w, fmt.Sprintf(`{"access_token":"%s"}`, getJWTLookAlike("example@example.com")))
 }
 
 type UserServerHandler struct{}
@@ -86,6 +101,7 @@ func qsDiff(one, two url.Values) {
  */
 
 func TestHandler(t *testing.T) {
+
 	fw = &ForwardAuth{
 		Path:         "_oauth",
 		ClientID:     "idtest",
@@ -98,6 +114,7 @@ func TestHandler(t *testing.T) {
 		},
 		CookieName: "cookie_test",
 		Lifetime:   time.Second * time.Duration(10),
+		stateMap:   ttlmap.NewWithTTL(time.Duration(time.Second * 10)),
 	}
 
 	// Should redirect vanilla request to login url
@@ -108,36 +125,49 @@ func TestHandler(t *testing.T) {
 	}
 	fwd, _ := res.Location()
 	if fwd.Scheme != "http" || fwd.Host != "test.com" || fwd.Path != "/auth" {
-		t.Error("Vanilla request should be redirected to login url, got:", fwd)
+		t.Error("Vanilla request should be redirected to login URL, got:", fwd)
 	}
 
-	// Should catch invalid cookie
+	// Should handle invalid cookie
 	req = newHTTPRequest("foo")
 
-	c := fw.MakeCookie(req, fw.CookieName, "test@example.com")
+	c := fw.MakeCookie(req, fw.CookieName, "non-existing-secret-key")
 	parts := strings.Split(c.Value, "|")
 	c.Value = fmt.Sprintf("bad|%s|%s", parts[1], parts[2])
 
 	res, _ = httpRequest(req, c)
 	if res.StatusCode != 401 {
-		t.Error("Request with invalid cookie shouldn't be authorised", res.StatusCode)
+		t.Error("Request with invalid cookie should not be authorized, got:", res.StatusCode)
 	}
+
+	// Should handle non existing secret key
+	req = newHTTPRequest("foo")
+	c = fw.MakeCookie(req, fw.CookieName, "non-existing-secret-key")
+	res, _ = httpRequest(req, c)
+	if res.StatusCode != 307 {
+		t.Error("Request with non existing secret key should be redirected to auth, got:", res.StatusCode)
+	}
+
+	// Configure the token in the stateMap
+	secureKey, err := getSecureKey()
+	if err != nil {
+		t.Error("Expected the secret key to generate but got", err)
+	}
+	pseudoToken := getJWTLookAlike("test@example.com")
+	fw.stateMap.Add(secureKey, pseudoToken)
 
 	// Should validate email
 	req = newHTTPRequest("foo")
-
-	c = fw.MakeCookie(req, fw.CookieName, "test@example.com")
+	c = fw.MakeCookie(req, fw.CookieName, secureKey)
 	fw.Domain = []string{"test.com"}
-
 	res, _ = httpRequest(req, c)
 	if res.StatusCode != 401 {
-		t.Error("Request with invalid cookie shouldn't be authorised", res.StatusCode)
+		t.Error("Request with an email for unauthorized domain should shouldn't be authorised", res.StatusCode)
 	}
 
 	// Should allow valid request email
 	req = newHTTPRequest("foo")
-
-	c = fw.MakeCookie(req, fw.CookieName, "test@example.com")
+	c = fw.MakeCookie(req, fw.CookieName, secureKey)
 	fw.Domain = []string{}
 
 	res, _ = httpRequest(req, c)
@@ -146,15 +176,16 @@ func TestHandler(t *testing.T) {
 	}
 
 	// Should pass through user
-	users := res.Header["X-Forwarded-User"]
-	if len(users) != 1 {
-		t.Error("Valid request missing X-Forwarded-User header")
-	} else if users[0] != "test@example.com" {
-		t.Error("X-Forwarded-User should match user, got: ", users)
+	bearerTokens := res.Header["X-Forwarded-Access-Token"]
+	if len(bearerTokens) != 1 {
+		t.Error("Valid request missing X-Forwarded-Access-Token header")
+	} else if bearerTokens[0] != pseudoToken {
+		t.Error("X-Forwarded-Access-Token should match test token, got:", bearerTokens[0])
 	}
 }
 
 func TestCallback(t *testing.T) {
+
 	fw = &ForwardAuth{
 		Path:         "_oauth",
 		ClientID:     "idtest",
@@ -166,14 +197,21 @@ func TestCallback(t *testing.T) {
 			Path:   "/auth",
 		},
 		CSRFCookieName: "csrf_test",
+		stateMap:       ttlmap.NewWithTTL(time.Duration(time.Second * 10)),
 	}
 
-	// Setup token server
-	tokenServerHandler := &TokenServerHandler{}
-	tokenServer := httptest.NewServer(tokenServerHandler)
-	defer tokenServer.Close()
-	tokenURL, _ := url.Parse(tokenServer.URL)
-	fw.TokenURL = tokenURL
+	// Setup valid user token server
+	tokenValidUserServerHandler := &TokenValidUserServerHandler{}
+	tokenValidUserServer := httptest.NewServer(tokenValidUserServerHandler)
+	defer tokenValidUserServer.Close()
+	tokenValidUserURL, _ := url.Parse(tokenValidUserServer.URL)
+
+	// Setup invalid user token server
+	tokenInvalidUserServerHandler := &TokenInvalidUserServerHandler{}
+	tokenInvalidUserServer := httptest.NewServer(tokenInvalidUserServerHandler)
+	defer tokenInvalidUserServer.Close()
+	tokenInvalidUserURL, _ := url.Parse(tokenInvalidUserServer.URL)
+	fw.TokenURL = tokenInvalidUserURL
 
 	// Setup user server
 	userServerHandler := &UserServerHandler{}
@@ -194,10 +232,20 @@ func TestCallback(t *testing.T) {
 	c := fw.MakeCSRFCookie(req, "nononononononononononononononono")
 	res, _ = httpRequest(req, c)
 	if res.StatusCode != 401 {
-		t.Error("Auth callback with invalid cookie shound't be authorised, got:", res.StatusCode)
+		t.Error("Auth callback with invalid cookie shouldn't be authorised, got:", res.StatusCode)
+	}
+
+	// Should catch email address from token not matching email address from user:
+	req = newHTTPRequest("_oauth?state=12345678901234567890123456789012:http://redirect")
+	c = fw.MakeCSRFCookie(req, "12345678901234567890123456789012")
+	res, _ = httpRequest(req, c)
+	if res.StatusCode != 401 {
+		t.Error("Request should not be authorized when user info email does not match token email, got:", res.StatusCode)
 	}
 
 	// Should redirect valid request
+	fw.TokenURL = tokenValidUserURL
+
 	req = newHTTPRequest("_oauth?state=12345678901234567890123456789012:http://redirect")
 	c = fw.MakeCSRFCookie(req, "12345678901234567890123456789012")
 	res, _ = httpRequest(req, c)

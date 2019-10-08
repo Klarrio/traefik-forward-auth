@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/tls"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -19,9 +18,8 @@ import (
 )
 
 var (
-	fw       *ForwardAuth
-	log      logrus.FieldLogger
-	stateMap ttlmap.TTLMap
+	fw  *ForwardAuth
+	log logrus.FieldLogger
 )
 
 // Primary handler
@@ -55,7 +53,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mapItem, hadItem := stateMap.Get(secureKey)
+	mapItem, hadItem := fw.stateMap.Get(secureKey)
 	if !hadItem {
 		redirectToAuth(uri.Path, logger, w, r)
 		return
@@ -90,7 +88,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	// Valid request
 	logger.Debug("Allowing valid request")
-	w.Header().Set("X-Forwarded-Access-Token", base64.StdEncoding.EncodeToString([]byte(tokenFromMapItem)))
+	w.Header().Set("X-Forwarded-Access-Token", tokenFromMapItem)
 	w.WriteHeader(200)
 }
 
@@ -159,7 +157,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 
 	if bearerToken.Email != user.Email {
 		logger.Error("User email did not match email from bearer token: ", err)
-		http.Error(w, "Bad request", 400)
+		http.Error(w, "Bad request", 401)
 		return
 	}
 
@@ -171,7 +169,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 	}
 
 	exp := bearerToken.ExpTime()
-	stateMap.AddWithTTL(secureKey, token, exp.Sub(time.Now()))
+	fw.stateMap.AddWithTTL(secureKey, token, exp.Sub(time.Now()))
 
 	// Generate cookie
 	http.SetCookie(w, fw.MakeCookieWithExpiry(r, fw.CookieName, secureKey, exp))
@@ -329,7 +327,6 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	stateMap = m
 
 	// Setup
 	fw = &ForwardAuth{
@@ -358,6 +355,8 @@ func main() {
 
 		Prompt:           *prompt,
 		UMAAuthorization: *umaAuthorization,
+
+		stateMap: m,
 	}
 
 	// Attach handler
