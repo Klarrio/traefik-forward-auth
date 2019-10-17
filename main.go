@@ -140,24 +140,10 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 		}
 	}
 
-	// Leave this bit here, we use it for further checks - get user
-	user, err := fw.GetUser(token)
-	if err != nil {
-		logger.Errorf("Error getting user: %s", err)
-		http.Error(w, "Service unavailable", 503)
-		return
-	}
-
 	bearerToken, err := bearerTokenFromWire(token)
 	if err != nil {
 		logger.Error("Error parsing bearer token: ", err)
 		http.Error(w, "Bad request", 400)
-		return
-	}
-
-	if bearerToken.Email != user.Email {
-		logger.Error("User email did not match email from bearer token: ", err)
-		http.Error(w, "Bad request", 401)
 		return
 	}
 
