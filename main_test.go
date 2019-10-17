@@ -33,14 +33,6 @@ func getJWT(t *testing.T, email string) string {
 	return tokenString
 }
 
-type TokenInvalidUserServerHandler struct {
-	t *testing.T
-}
-
-func (t *TokenInvalidUserServerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprint(w, fmt.Sprintf(`{"access_token":"%s"}`, getJWT(t.t, "test@example.com")))
-}
-
 type TokenValidUserServerHandler struct {
 	t *testing.T
 }
@@ -244,15 +236,6 @@ func TestCallback(t *testing.T) {
 	defer tokenValidUserServer.Close()
 	tokenValidUserURL, _ := url.Parse(tokenValidUserServer.URL)
 
-	// Setup invalid user token server
-	tokenInvalidUserServerHandler := &TokenInvalidUserServerHandler{
-		t: t,
-	}
-	tokenInvalidUserServer := httptest.NewServer(tokenInvalidUserServerHandler)
-	defer tokenInvalidUserServer.Close()
-	tokenInvalidUserURL, _ := url.Parse(tokenInvalidUserServer.URL)
-	fw.TokenURL = tokenInvalidUserURL
-
 	// Setup user server
 	userServerHandler := &UserServerHandler{}
 	userServer := httptest.NewServer(userServerHandler)
@@ -273,14 +256,6 @@ func TestCallback(t *testing.T) {
 	res, _ = httpRequest(req, c)
 	if res.StatusCode != 401 {
 		t.Error("Auth callback with invalid cookie shouldn't be authorised, got:", res.StatusCode)
-	}
-
-	// Should catch email address from token not matching email address from user:
-	req = newHTTPRequest("_oauth?state=12345678901234567890123456789012:http://redirect")
-	c = fw.MakeCSRFCookie(req, "12345678901234567890123456789012")
-	res, _ = httpRequest(req, c)
-	if res.StatusCode != 401 {
-		t.Error("Request should not be authorized when user info email does not match token email, got:", res.StatusCode)
 	}
 
 	// Should redirect valid request
