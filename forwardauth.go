@@ -14,6 +14,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gitlab.com/Klarrio/traefik-forward-auth/ttlmap"
+)
+
+const (
+	defaultNonceSize = 16
 )
 
 // ForwardAuth represents forward autheentication object
@@ -22,7 +28,7 @@ type ForwardAuth struct {
 	Lifetime time.Duration
 	Secret   []byte
 
-	ClientId     string
+	ClientID     string
 	ClientSecret string `json:"-"`
 	Scope        string
 
@@ -31,9 +37,6 @@ type ForwardAuth struct {
 	UserURL  *url.URL
 
 	AuthHost string
-
-	BearerCookieName  string
-	BearerCookieInUse bool
 
 	CookieName     string
 	CookieDomains  []CookieDomain
@@ -47,11 +50,13 @@ type ForwardAuth struct {
 
 	Prompt           string
 	UMAAuthorization bool
+
+	stateMap ttlmap.TTLMap
 }
 
 // Request Validation
 
-// Cookie = hash(secret, cookie domain, email, expires)|expires|email
+// ValidateCookie validates cookies using the following formula: Cookie = hash(secret, cookie domain, content, expires)|expires|content
 func (f *ForwardAuth) ValidateCookie(r *http.Request, c *http.Cookie) (bool, string, error) {
 	parts := strings.Split(c.Value, "|")
 
@@ -89,6 +94,8 @@ func (f *ForwardAuth) ValidateCookie(r *http.Request, c *http.Cookie) (bool, str
 	return true, parts[2], nil
 }
 
+// ValidateEmail validates that the email address belongs to one of the white listed
+// or configured domains.
 func (f *ForwardAuth) ValidateEmail(email string) bool {
 	found := false
 	if len(f.Whitelist) > 0 {
@@ -116,18 +123,18 @@ func (f *ForwardAuth) ValidateEmail(email string) bool {
 
 // OAuth Methods
 
-// Get login url
+// GetLoginURL gets the login URL for the service.
 func (f *ForwardAuth) GetLoginURL(r *http.Request, nonce string) string {
-	state := fmt.Sprintf("%s:%s", nonce, f.returnUrl(r))
+	state := fmt.Sprintf("%s:%s", nonce, f.returnURL(r))
 
 	q := url.Values{}
-	q.Set("client_id", fw.ClientId)
+	q.Set("client_id", fw.ClientID)
 	q.Set("response_type", "code")
 	q.Set("scope", fw.Scope)
 	if fw.Prompt != "" {
 		q.Set("prompt", fw.Prompt)
 	}
-	q.Set("redirect_uri", f.redirectUri(r))
+	q.Set("redirect_uri", f.redirectURI(r))
 	q.Set("state", state)
 
 	var u url.URL
@@ -139,16 +146,19 @@ func (f *ForwardAuth) GetLoginURL(r *http.Request, nonce string) string {
 
 // Exchange code for token
 
+// Token is the intermediate authorization token object
+// used for token deserialization during the token exchange.
 type Token struct {
 	Token string `json:"access_token"`
 }
 
+// ExchangeCode exchanges the authorization code for the token.
 func (f *ForwardAuth) ExchangeCode(r *http.Request, code string) (string, error) {
 	form := url.Values{}
-	form.Set("client_id", fw.ClientId)
+	form.Set("client_id", fw.ClientID)
 	form.Set("client_secret", fw.ClientSecret)
 	form.Set("grant_type", "authorization_code")
-	form.Set("redirect_uri", f.redirectUri(r))
+	form.Set("redirect_uri", f.redirectURI(r))
 	form.Set("code", code)
 
 	// allow insecure certificates when enabled
@@ -182,7 +192,7 @@ func (f *ForwardAuth) VerifyAccess(token string) (bool, error) {
 
 	data := url.Values{}
 	data.Set("grant_type", "urn:ietf:params:oauth:grant-type:uma-ticket")
-	data.Set("audience", fw.ClientId)
+	data.Set("audience", fw.ClientID)
 	encoded := data.Encode()
 
 	req, err := http.NewRequest(http.MethodPost, fw.TokenURL.String(), strings.NewReader(encoded))
@@ -201,13 +211,16 @@ func (f *ForwardAuth) VerifyAccess(token string) (bool, error) {
 
 // Get user with token
 
+// User is the intermediate user object used when fetching
+// user info from the authentication service.
 type User struct {
-	Id       string `json:"id"`
+	ID       string `json:"id"`
 	Email    string `json:"email"`
 	Verified bool   `json:"verified_email"`
 	Hd       string `json:"hd"`
 }
 
+// GetUser retries the user info for the given token from the authentication service.
 func (f *ForwardAuth) GetUser(token string) (User, error) {
 	var user User
 
@@ -244,14 +257,14 @@ func (f *ForwardAuth) redirectBase(r *http.Request) string {
 }
 
 // Return url
-func (f *ForwardAuth) returnUrl(r *http.Request) string {
+func (f *ForwardAuth) returnURL(r *http.Request) string {
 	path := r.Header.Get("X-Forwarded-Uri")
 
 	return fmt.Sprintf("%s%s", f.redirectBase(r), path)
 }
 
 // Get oauth redirect uri
-func (f *ForwardAuth) redirectUri(r *http.Request) string {
+func (f *ForwardAuth) redirectURI(r *http.Request) string {
 	if use, _ := f.useAuthDomain(r); use {
 		proto := r.Header.Get("X-Forwarded-Proto")
 		return fmt.Sprintf("%s://%s%s", proto, f.AuthHost, f.Path)
@@ -276,39 +289,9 @@ func (f *ForwardAuth) useAuthDomain(r *http.Request) (bool, string) {
 	return reqMatch && authMatch && reqHost == authHost, reqHost
 }
 
-// Cookie methods
+// -- Cookie methods
 
-// Create an auth cookie
-func (f *ForwardAuth) MakeCookie(r *http.Request, name, content string) *http.Cookie {
-	expires := f.cookieExpiry()
-	mac := f.cookieSignature(r, content, fmt.Sprintf("%d", expires.Unix()))
-	value := fmt.Sprintf("%s|%d|%s", mac, expires.Unix(), content)
-
-	return &http.Cookie{
-		Name:     name,
-		Value:    value,
-		Path:     "/",
-		Domain:   f.cookieDomain(r),
-		HttpOnly: true,
-		Secure:   f.CookieSecure,
-		Expires:  expires,
-	}
-}
-
-// Make a CSRF cookie (used during login only)
-func (f *ForwardAuth) MakeCSRFCookie(r *http.Request, nonce string) *http.Cookie {
-	return &http.Cookie{
-		Name:     f.CSRFCookieName,
-		Value:    nonce,
-		Path:     "/",
-		Domain:   f.csrfCookieDomain(r),
-		HttpOnly: true,
-		Secure:   f.CookieSecure,
-		Expires:  f.cookieExpiry(),
-	}
-}
-
-// Create a cookie to clear csrf cookie
+// ClearCSRFCookie sets a cookie to clear previous CSRF cookie.
 func (f *ForwardAuth) ClearCSRFCookie(r *http.Request) *http.Cookie {
 	return &http.Cookie{
 		Name:     f.CSRFCookieName,
@@ -321,7 +304,41 @@ func (f *ForwardAuth) ClearCSRFCookie(r *http.Request) *http.Cookie {
 	}
 }
 
-// Validate the csrf cookie against state
+// MakeCookie creates a cookie of a given name with given content.
+// Uses default cookie expiry.
+func (f *ForwardAuth) MakeCookie(r *http.Request, name, content string) *http.Cookie {
+	return f.MakeCookieWithExpiry(r, name, content, f.cookieExpiry())
+}
+
+// MakeCSRFCookie creates a CSRF cookie (used during login only)
+func (f *ForwardAuth) MakeCSRFCookie(r *http.Request, nonce string) *http.Cookie {
+	return &http.Cookie{
+		Name:     f.CSRFCookieName,
+		Value:    nonce,
+		Path:     "/",
+		Domain:   f.csrfCookieDomain(r),
+		HttpOnly: true,
+		Secure:   f.CookieSecure,
+		Expires:  f.cookieExpiry(),
+	}
+}
+
+// MakeCookieWithExpiry creates a cookie of a given name with given content, with explicit expiry.
+func (f *ForwardAuth) MakeCookieWithExpiry(r *http.Request, name, content string, expires time.Time) *http.Cookie {
+	mac := f.cookieSignature(r, content, fmt.Sprintf("%d", expires.Unix()))
+	value := fmt.Sprintf("%s|%d|%s", mac, expires.Unix(), content)
+	return &http.Cookie{
+		Name:     name,
+		Value:    value,
+		Path:     "/",
+		Domain:   f.cookieDomain(r),
+		HttpOnly: true,
+		Secure:   f.CookieSecure,
+		Expires:  expires,
+	}
+}
+
+// ValidateCSRFCookie validates the CSRF cookie against state.
 func (f *ForwardAuth) ValidateCSRFCookie(c *http.Cookie, state string) (bool, string, error) {
 	if len(c.Value) != 32 {
 		return false, "", errors.New("Invalid CSRF cookie value")
@@ -340,15 +357,20 @@ func (f *ForwardAuth) ValidateCSRFCookie(c *http.Cookie, state string) (bool, st
 	return true, state[33:], nil
 }
 
-func (f *ForwardAuth) Nonce() (error, string) {
+// Nonce generates a new random nonce using the default nonce size.
+func (f *ForwardAuth) Nonce() (string, error) {
+	return f.NonceWithSize(defaultNonceSize)
+}
+
+// NonceWithSize generates a new random nonce using the specified size.
+func (f *ForwardAuth) NonceWithSize(size int) (string, error) {
 	// Make nonce
-	nonce := make([]byte, 16)
+	nonce := make([]byte, size)
 	_, err := rand.Read(nonce)
 	if err != nil {
-		return err, ""
+		return "", err
 	}
-
-	return nil, fmt.Sprintf("%x", nonce)
+	return fmt.Sprintf("%x", nonce), nil
 }
 
 // Cookie domain
@@ -389,10 +411,10 @@ func (f *ForwardAuth) matchCookieDomains(domain string) (bool, string) {
 }
 
 // Create cookie hmac
-func (f *ForwardAuth) cookieSignature(r *http.Request, email, expires string) string {
+func (f *ForwardAuth) cookieSignature(r *http.Request, content, expires string) string {
 	hash := hmac.New(sha256.New, f.Secret)
 	hash.Write([]byte(f.cookieDomain(r)))
-	hash.Write([]byte(email))
+	hash.Write([]byte(content))
 	hash.Write([]byte(expires))
 	return base64.URLEncoding.EncodeToString(hash.Sum(nil))
 }
@@ -402,9 +424,9 @@ func (f *ForwardAuth) cookieExpiry() time.Time {
 	return time.Now().Local().Add(f.Lifetime)
 }
 
-// Cookie Domain
+// -- Cookie Domain
 
-// Cookie Domain
+// CookieDomain represents a cookie domain.
 type CookieDomain struct {
 	Domain       string
 	DomainLen    int
@@ -412,6 +434,7 @@ type CookieDomain struct {
 	SubDomainLen int
 }
 
+// NewCookieDomain returns a new CookieDomain for a given domain name.
 func NewCookieDomain(domain string) *CookieDomain {
 	return &CookieDomain{
 		Domain:       domain,
@@ -421,6 +444,7 @@ func NewCookieDomain(domain string) *CookieDomain {
 	}
 }
 
+// Match returns true of the given host matches the cookie domain.
 func (c *CookieDomain) Match(host string) bool {
 	// Exact domain match?
 	if host == c.Domain {

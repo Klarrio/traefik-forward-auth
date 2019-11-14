@@ -11,16 +11,34 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"gitlab.com/Klarrio/traefik-forward-auth/ttlmap"
+
+	"github.com/dgrijalva/jwt-go"
 )
 
 /**
  * Utilities
  */
 
-type TokenServerHandler struct{}
+func getJWT(t *testing.T, email string) string {
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"exp":   time.Now().Add(time.Duration(time.Second * 10)).Unix(),
+		"email": email,
+	})
+	tokenString, signError := token.SignedString([]byte("a-test-signing-key"))
+	if signError != nil {
+		t.Fatal("Could not sign the JWT token, reason:", signError)
+	}
+	return tokenString
+}
 
-func (t *TokenServerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprint(w, `{"access_token":"123456789"}`)
+type TokenValidUserServerHandler struct {
+	t *testing.T
+}
+
+func (t *TokenValidUserServerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprint(w, fmt.Sprintf(`{"access_token":"%s"}`, getJWT(t.t, "example@example.com")))
 }
 
 type UserServerHandler struct{}
@@ -59,7 +77,7 @@ func httpRequest(r *http.Request, c *http.Cookie) (*http.Response, string) {
 	return res, string(body)
 }
 
-func newHttpRequest(uri string) *http.Request {
+func newHTTPRequest(uri string) *http.Request {
 	r := httptest.NewRequest("", "http://example.com", nil)
 	r.Header.Add("X-Forwarded-Uri", uri)
 	return r
@@ -86,9 +104,10 @@ func qsDiff(one, two url.Values) {
  */
 
 func TestHandler(t *testing.T) {
+
 	fw = &ForwardAuth{
 		Path:         "_oauth",
-		ClientId:     "idtest",
+		ClientID:     "idtest",
 		ClientSecret: "sectest",
 		Scope:        "scopetest",
 		LoginURL: &url.URL{
@@ -98,46 +117,60 @@ func TestHandler(t *testing.T) {
 		},
 		CookieName: "cookie_test",
 		Lifetime:   time.Second * time.Duration(10),
+		stateMap:   ttlmap.NewWithTTL(time.Duration(time.Second * 10)),
 	}
 
 	// Should redirect vanilla request to login url
-	req := newHttpRequest("foo")
+	req := newHTTPRequest("foo")
 	res, _ := httpRequest(req, nil)
 	if res.StatusCode != 307 {
 		t.Error("Vanilla request should be redirected with 307, got:", res.StatusCode)
 	}
 	fwd, _ := res.Location()
 	if fwd.Scheme != "http" || fwd.Host != "test.com" || fwd.Path != "/auth" {
-		t.Error("Vanilla request should be redirected to login url, got:", fwd)
+		t.Error("Vanilla request should be redirected to login URL, got:", fwd)
 	}
 
-	// Should catch invalid cookie
-	req = newHttpRequest("foo")
+	// Should handle invalid cookie
+	req = newHTTPRequest("foo")
 
-	c := fw.MakeCookie(req, fw.CookieName, "test@example.com")
+	c := fw.MakeCookie(req, fw.CookieName, "non-existing-secret-key")
 	parts := strings.Split(c.Value, "|")
 	c.Value = fmt.Sprintf("bad|%s|%s", parts[1], parts[2])
 
 	res, _ = httpRequest(req, c)
 	if res.StatusCode != 401 {
-		t.Error("Request with invalid cookie shouldn't be authorised", res.StatusCode)
+		t.Error("Request with invalid cookie should not be authorized, got:", res.StatusCode)
 	}
 
+	// Should handle non existing secret key
+	req = newHTTPRequest("foo")
+	c = fw.MakeCookie(req, fw.CookieName, "non-existing-secret-key")
+	res, _ = httpRequest(req, c)
+	if res.StatusCode != 307 {
+		t.Error("Request with non existing secret key should be redirected to auth, got:", res.StatusCode)
+	}
+
+	// Configure the token in the stateMap
+	secureKey, err := getSecureKey()
+	if err != nil {
+		t.Error("Expected the secret key to generate but got", err)
+	}
+	pseudoToken := getJWT(t, "test@example.com")
+	fw.stateMap.Add(secureKey, pseudoToken)
+
 	// Should validate email
-	req = newHttpRequest("foo")
-
-	c = fw.MakeCookie(req, fw.CookieName, "test@example.com")
+	req = newHTTPRequest("foo")
+	c = fw.MakeCookie(req, fw.CookieName, secureKey)
 	fw.Domain = []string{"test.com"}
-
 	res, _ = httpRequest(req, c)
 	if res.StatusCode != 401 {
-		t.Error("Request with invalid cookie shouldn't be authorised", res.StatusCode)
+		t.Error("Request with an email for unauthorized domain should shouldn't be authorised", res.StatusCode)
 	}
 
 	// Should allow valid request email
-	req = newHttpRequest("foo")
-
-	c = fw.MakeCookie(req, fw.CookieName, "test@example.com")
+	req = newHTTPRequest("foo")
+	c = fw.MakeCookie(req, fw.CookieName, secureKey)
 	fw.Domain = []string{}
 
 	res, _ = httpRequest(req, c)
@@ -146,18 +179,44 @@ func TestHandler(t *testing.T) {
 	}
 
 	// Should pass through user
-	users := res.Header["X-Forwarded-User"]
-	if len(users) != 1 {
-		t.Error("Valid request missing X-Forwarded-User header")
-	} else if users[0] != "test@example.com" {
-		t.Error("X-Forwarded-User should match user, got: ", users)
+	bearerTokens := res.Header["X-Forwarded-Access-Token"]
+	if len(bearerTokens) != 1 {
+		t.Error("Valid request missing X-Forwarded-Access-Token header")
+	} else if bearerTokens[0] != pseudoToken {
+		t.Error("X-Forwarded-Access-Token should match test token, got:", bearerTokens[0])
+	}
+
+	// Validate that tokens expire
+	shortLivedSecureKey, err := getSecureKey()
+	if err != nil {
+		t.Error("Expected the secret key to generate but got", err)
+	}
+	fw.stateMap.AddWithTTL(shortLivedSecureKey, pseudoToken, time.Second)
+
+	req = newHTTPRequest("foo")
+	c = fw.MakeCookie(req, fw.CookieName, shortLivedSecureKey)
+	fw.Domain = []string{}
+	res, _ = httpRequest(req, c)
+	if res.StatusCode != 200 {
+		t.Error("Valid request should be allowed before key expiry, got:", res.StatusCode)
+	}
+
+	<-time.After(time.Duration(time.Second * 2))
+
+	req = newHTTPRequest("foo")
+	c = fw.MakeCookie(req, fw.CookieName, shortLivedSecureKey)
+	fw.Domain = []string{}
+	res, _ = httpRequest(req, c)
+	if res.StatusCode != 307 {
+		t.Error("Valid request should be disallowed and redirected to the authentication when key expired, got:", res.StatusCode)
 	}
 }
 
 func TestCallback(t *testing.T) {
+
 	fw = &ForwardAuth{
 		Path:         "_oauth",
-		ClientId:     "idtest",
+		ClientID:     "idtest",
 		ClientSecret: "sectest",
 		Scope:        "scopetest",
 		LoginURL: &url.URL{
@@ -166,39 +225,43 @@ func TestCallback(t *testing.T) {
 			Path:   "/auth",
 		},
 		CSRFCookieName: "csrf_test",
+		stateMap:       ttlmap.NewWithTTL(time.Duration(time.Second * 10)),
 	}
 
-	// Setup token server
-	tokenServerHandler := &TokenServerHandler{}
-	tokenServer := httptest.NewServer(tokenServerHandler)
-	defer tokenServer.Close()
-	tokenUrl, _ := url.Parse(tokenServer.URL)
-	fw.TokenURL = tokenUrl
+	// Setup valid user token server
+	tokenValidUserServerHandler := &TokenValidUserServerHandler{
+		t: t,
+	}
+	tokenValidUserServer := httptest.NewServer(tokenValidUserServerHandler)
+	defer tokenValidUserServer.Close()
+	tokenValidUserURL, _ := url.Parse(tokenValidUserServer.URL)
 
 	// Setup user server
 	userServerHandler := &UserServerHandler{}
 	userServer := httptest.NewServer(userServerHandler)
 	defer userServer.Close()
-	userUrl, _ := url.Parse(userServer.URL)
-	fw.UserURL = userUrl
+	userURL, _ := url.Parse(userServer.URL)
+	fw.UserURL = userURL
 
 	// Should pass auth response request to callback
-	req := newHttpRequest("_oauth")
+	req := newHTTPRequest("_oauth")
 	res, _ := httpRequest(req, nil)
 	if res.StatusCode != 401 {
 		t.Error("Auth callback without cookie shouldn't be authorised, got:", res.StatusCode)
 	}
 
 	// Should catch invalid csrf cookie
-	req = newHttpRequest("_oauth?state=12345678901234567890123456789012:http://redirect")
+	req = newHTTPRequest("_oauth?state=12345678901234567890123456789012:http://redirect")
 	c := fw.MakeCSRFCookie(req, "nononononononononononononononono")
 	res, _ = httpRequest(req, c)
 	if res.StatusCode != 401 {
-		t.Error("Auth callback with invalid cookie shound't be authorised, got:", res.StatusCode)
+		t.Error("Auth callback with invalid cookie shouldn't be authorised, got:", res.StatusCode)
 	}
 
 	// Should redirect valid request
-	req = newHttpRequest("_oauth?state=12345678901234567890123456789012:http://redirect")
+	fw.TokenURL = tokenValidUserURL
+
+	req = newHTTPRequest("_oauth?state=12345678901234567890123456789012:http://redirect")
 	c = fw.MakeCSRFCookie(req, "12345678901234567890123456789012")
 	res, _ = httpRequest(req, c)
 	if res.StatusCode != 307 {
