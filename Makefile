@@ -1,4 +1,4 @@
-DOCKER_NAMESPACE?=klarrio-docker.jfrog.io/tools
+DOCKER_NAMESPACE?=klarrio-docker.jfrog.io/klarrio
 DOCKER_TAG?=latest
 
 .PHONY: build-linux
