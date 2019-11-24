@@ -1,4 +1,4 @@
-module gitlab.com/Klarrio/traefik-forward-auth
+module github.com/Klarrio/traefik-forward-auth
 
 go 1.12
 

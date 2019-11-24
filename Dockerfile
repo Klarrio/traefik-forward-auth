@@ -6,7 +6,7 @@ ARG VCS_REF
 
 # Good docker practice, plus we get microbadger badges
 LABEL org.label-schema.build-date=$BUILD_DATE \
-      org.label-schema.vcs-url="https://gitlab.com/Klarrio/dev/tool/traefik-forward-auth.git" \
+      org.label-schema.vcs-url="https://github.com/Klarrio/traefik-forward-auth.git" \
       org.label-schema.vcs-ref=$VCS_REF \
       org.label-schema.schema-version="2.2-r1"
 
