@@ -14,7 +14,7 @@ import (
 	"github.com/namsral/flag"
 	"github.com/sirupsen/logrus"
 
-	"gitlab.com/Klarrio/traefik-forward-auth/ttlmap"
+	"github.com/Klarrio/traefik-forward-auth/ttlmap"
 )
 
 var (
@@ -142,7 +142,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 
 	bearerToken, err := bearerTokenFromWire(token)
 	if err != nil {
-		logger.Error("Error parsing bearer token: ", err)
+		logger.Error("Error parsing bearer token '", token, "': ", err)
 		http.Error(w, "Bad request", 400)
 		return
 	}

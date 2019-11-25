@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -34,7 +35,8 @@ func bearerTokenFromWire(wireMessage string) (*BearerToken, error) {
 	if len(parts) != 3 {
 		return nil, errors.New("invalid JWT token")
 	}
-	payloadBytes, base64DecodeError := base64.StdEncoding.DecodeString(parts[1])
+
+	payloadBytes, base64DecodeError := base64.StdEncoding.WithPadding(base64.NoPadding).DecodeString(parts[1])
 	if base64DecodeError != nil {
 		return nil, base64DecodeError
 	}

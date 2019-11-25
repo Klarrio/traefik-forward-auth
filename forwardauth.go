@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"gitlab.com/Klarrio/traefik-forward-auth/ttlmap"
+	"github.com/Klarrio/traefik-forward-auth/ttlmap"
 )
 
 const (
