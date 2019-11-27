@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/Klarrio/traefik-forward-auth/ttlmap"
+	"github.com/Klarrio/traefik-forward-auth/ttlmap"
 
 	"github.com/dgrijalva/jwt-go"
 )
