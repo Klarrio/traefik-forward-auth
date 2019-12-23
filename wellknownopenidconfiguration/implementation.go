@@ -101,6 +101,42 @@ func (w *WellKnownOpenIDConfiguration) ValidateToken(token string) (*TokenValida
 	return result, result.ToError()
 }
 
+// LogOut logs out given token.
+func (w *WellKnownOpenIDConfiguration) LogOut(clientID, token string) error {
+
+	uriString := fmt.Sprintf("%s?client_id=%s&id_token_hint=%s", w.EndSessionEndpoint, clientID, token)
+
+	request, requestError := http.NewRequest("GET", uriString, nil)
+	if requestError != nil {
+		return requestError
+	}
+	//authHeaderAdded := w.credentials.MaybeAddBasicAuth(request)
+
+	w.logger.Warn("token log out", "uri", uriString)
+
+	httpClient := &http.Client{}
+	response, responseEError := httpClient.Do(request)
+	if responseEError != nil {
+		return responseEError
+	}
+	responseBytes, responseBodyError := ioutil.ReadAll(response.Body)
+	if responseBodyError != nil {
+		return responseBodyError
+	}
+
+	w.logger.Warn("token logged out", "response", string(responseBytes))
+
+	/*
+		result := &TokenValidationResult{}
+		if jsonError := json.Unmarshal(responseBytes, result); jsonError != nil {
+			return nil, jsonError
+		}
+		return result, result.ToError()
+	*/
+
+	return nil
+}
+
 // ResolveWellKnownOpenIDConfiguration resolves the well known open ID configuration for a given realm.
 func ResolveWellKnownOpenIDConfiguration(logger logrus.FieldLogger, realmURI, username, password string) (*WellKnownOpenIDConfiguration, error) {
 	request, requestError := http.NewRequest("GET", fmt.Sprintf("%s/.well-known/openid-configuration", realmURI), nil)

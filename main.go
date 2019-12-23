@@ -63,8 +63,8 @@ func handler(w http.ResponseWriter, r *http.Request) {
 			"expired-at": mapItem.ExpiresAt().String(),
 			"now":        time.Now().String(),
 		}).Debug("token for secure key expired, redirecting to auth")
-		redirectToAuth(uri.Path, logger, w, r)
 		fw.stateMap.Remove(secureKey) // cleanup
+		redirectToAuth(uri.Path, logger, w, r)
 		return
 	}
 
@@ -76,6 +76,24 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	default:
 		logger.Error("Expected the map item to contain a string token but received ", tval)
 		http.Error(w, "Internal server error", 500)
+		return
+	}
+
+	// Handle logout:
+	if fw.logoutPath != "" && uri.Path == fw.logoutPath {
+		logger.WithFields(logrus.Fields{
+			"logout-path":      fw.logoutPath,
+			"post-redirect-to": fw.postLogoutPath,
+		}).Error("handling logout ")
+		fw.stateMap.Remove(secureKey)
+		http.SetCookie(w, fw.ClearCookie(r, fw.CookieName))
+		if logoutError := fw.wellKnownOpenIDConfiguration.LogOut(fw.ClientID, tokenFromMapItem); logoutError != nil {
+			logger.WithFields(logrus.Fields{
+				"logout-error": logoutError,
+			}).Error("error while logging out")
+		}
+		r.Header.Set("X-Forwarded-Uri", fw.postLogoutPath)
+		redirectToAuth(uri.Path, logger, w, r)
 		return
 	}
 
@@ -278,6 +296,9 @@ func main() {
 	logFormat := flag.String("log-format", "text", "Log format: text, json, pretty")
 	tokenValidatorEnabled := flag.Bool("token-validator-enabled", true, "Log format: text, json, pretty")
 
+	logoutPath := flag.String("logout-path", "", "Logout path, if empty, logout not enabled")
+	postLogoutPath := flag.String("post-logout-path", "", "Path to redirect to after logout")
+
 	flag.Parse()
 
 	// Setup logger
@@ -366,6 +387,8 @@ func main() {
 		stateMap:                     m,
 		wellKnownOpenIDConfiguration: wellKnownOpenIDConfiguration,
 		tokenValidatorEnabled:        *tokenValidatorEnabled,
+		postLogoutPath:               *postLogoutPath,
+		logoutPath:                   *logoutPath,
 	}
 
 	// Attach handler
