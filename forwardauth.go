@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Klarrio/traefik-forward-auth/ttlmap"
+	"github.com/Klarrio/traefik-forward-auth/wellknownopenidconfiguration"
 )
 
 const (
@@ -51,7 +52,8 @@ type ForwardAuth struct {
 	Prompt           string
 	UMAAuthorization bool
 
-	stateMap ttlmap.TTLMap
+	stateMap                     ttlmap.TTLMap
+	wellKnownOpenIDConfiguration *wellknownopenidconfiguration.WellKnownOpenIDConfiguration
 }
 
 // Request Validation
@@ -298,6 +300,19 @@ func (f *ForwardAuth) ClearCSRFCookie(r *http.Request) *http.Cookie {
 		Value:    "",
 		Path:     "/",
 		Domain:   f.csrfCookieDomain(r),
+		HttpOnly: true,
+		Secure:   f.CookieSecure,
+		Expires:  time.Now().Local().Add(time.Hour * -1),
+	}
+}
+
+// ClearCookie removes a cookie with given name.
+func (f *ForwardAuth) ClearCookie(r *http.Request, name string) *http.Cookie {
+	return &http.Cookie{
+		Name:     name,
+		Value:    "",
+		Path:     "/",
+		Domain:   f.cookieDomain(r),
 		HttpOnly: true,
 		Secure:   f.CookieSecure,
 		Expires:  time.Now().Local().Add(time.Hour * -1),

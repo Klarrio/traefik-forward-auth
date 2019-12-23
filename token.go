@@ -11,8 +11,28 @@ import (
 // BearerToken is an intermediate object used for parsing bearer tokens
 // retrieved from the wire.
 type BearerToken struct {
-	Exp   float64 `json:"exp"`
-	Email string  `json:"email"`
+	Jti               string                         `json:"jti"`
+	Exp               int64                          `json:"exp"`
+	Nbf               int64                          `json:"nbf"`
+	Iat               int64                          `json:"iat"`
+	Iss               string                         `json:"iss"`
+	Aud               string                         `json:"aud"`
+	Sub               string                         `json:"sub"`
+	Typ               string                         `json:"typ"`
+	Azp               string                         `json:"azp"`
+	Nonce             string                         `json:"nonce"`
+	AuthTime          int64                          `json:"auth_time"`
+	SessionState      string                         `json:"session_state"`
+	Acr               string                         `json:"acr"`
+	RealmAccess       map[string][]string            `json:"realm_access"`
+	ResourceAccess    map[string]map[string][]string `json:"resource_access"`
+	Scope             string                         `json:"scope"`
+	Email             string                         `json:"email"`
+	EmailVerified     bool                           `json:"email_verified"`
+	Name              string                         `json:"name"`
+	PreferredUsername string                         `json:"preferred_username"`
+	GivenName         string                         `json:"given_name"`
+	FamilyName        string                         `json:"family_name"`
 }
 
 // ExpTime returns a time.Time representation of the token exp.

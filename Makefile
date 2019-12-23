@@ -1,5 +1,5 @@
 DOCKER_NAMESPACE?=klarrio-docker.jfrog.io/klarrio
-DOCKER_TAG?=latest
+DOCKER_TAG=`cat .version`
 
 .PHONY: build-linux
 build-linux:
