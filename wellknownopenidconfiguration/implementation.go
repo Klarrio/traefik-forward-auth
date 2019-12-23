@@ -126,14 +126,6 @@ func (w *WellKnownOpenIDConfiguration) LogOut(clientID, token string) error {
 
 	w.logger.Warn("token logged out", "response", string(responseBytes))
 
-	/*
-		result := &TokenValidationResult{}
-		if jsonError := json.Unmarshal(responseBytes, result); jsonError != nil {
-			return nil, jsonError
-		}
-		return result, result.ToError()
-	*/
-
 	return nil
 }
 
