@@ -95,31 +95,38 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	validationResult, err := fw.wellKnownOpenIDConfiguration.ValidateToken(tokenFromMapItem)
-	if err != nil {
-		logger.WithFields(logrus.Fields{
-			"error": err,
-		}).Error("Failed to validate token")
-		fw.stateMap.Remove(secureKey)
-		http.SetCookie(w, fw.ClearCookie(r, fw.CookieName))
-		redirectToAuth(uri.Path, logger, w, r)
-		return
-	}
-
-	if !validationResult.Active {
+	if fw.tokenValidatorEnabled {
+		validationResult, err := fw.wellKnownOpenIDConfiguration.ValidateToken(tokenFromMapItem)
+		var requirelogin bool
+		if err != nil {
+			logger.WithFields(logrus.Fields{
+				"error": err,
+			}).Error("Failed to validate token")
+			requirelogin = true
+		} else {
+			if !validationResult.Active {
+				logger.WithFields(logrus.Fields{
+					"result": validationResult,
+				}).Error("Token invalid, redirecting to auth")
+				requirelogin = true
+			}
+		}
+		if requirelogin {
+			fw.stateMap.Remove(secureKey)
+			http.SetCookie(w, fw.ClearCookie(r, fw.CookieName))
+			redirectToAuth(uri.Path, logger, w, r)
+			return
+		}
+		// Valid request
 		logger.WithFields(logrus.Fields{
 			"result": validationResult,
-		}).Error("Token invalid, redirecting to auth")
-		fw.stateMap.Remove(secureKey)
-		http.SetCookie(w, fw.ClearCookie(r, fw.CookieName))
-		redirectToAuth(uri.Path, logger, w, r)
-		return
+		}).Debug("Allowing valid request")
+	} else {
+		// Valid request
+		logger.WithFields(logrus.Fields{
+			"validator-disabled": true,
+		}).Debug("Allowing valid request")
 	}
-
-	// Valid request
-	logger.WithFields(logrus.Fields{
-		"result": validationResult,
-	}).Debug("Allowing valid request")
 
 	w.Header().Set("X-Forwarded-Access-Token", tokenFromMapItem)
 	w.WriteHeader(200)
@@ -269,6 +276,7 @@ func main() {
 	umaAuthorization := flag.Bool("uma-authorization", false, "whether UMA-based authorization will be performed")
 	logLevel := flag.String("log-level", "warn", "Log level: trace, debug, info, warn, error, fatal, panic")
 	logFormat := flag.String("log-format", "text", "Log format: text, json, pretty")
+	tokenValidatorEnabled := flag.Bool("token-validator-enabled", true, "Log format: text, json, pretty")
 
 	flag.Parse()
 
@@ -357,6 +365,7 @@ func main() {
 
 		stateMap:                     m,
 		wellKnownOpenIDConfiguration: wellKnownOpenIDConfiguration,
+		tokenValidatorEnabled:        *tokenValidatorEnabled,
 	}
 
 	// Attach handler

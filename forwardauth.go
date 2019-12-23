@@ -54,6 +54,7 @@ type ForwardAuth struct {
 
 	stateMap                     ttlmap.TTLMap
 	wellKnownOpenIDConfiguration *wellknownopenidconfiguration.WellKnownOpenIDConfiguration
+	tokenValidatorEnabled        bool
 }
 
 // Request Validation
