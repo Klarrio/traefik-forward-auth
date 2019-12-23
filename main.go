@@ -296,6 +296,7 @@ func main() {
 	logFormat := flag.String("log-format", "text", "Log format: text, json, pretty")
 	tokenValidatorEnabled := flag.Bool("token-validator-enabled", true, "Log format: text, json, pretty")
 
+	scope := flag.String("scope", "openid profile email", "Requested scopes")
 	logoutPath := flag.String("logout-path", "", "Logout path, if empty, logout not enabled")
 	postLogoutPath := flag.String("post-logout-path", "", "Path to redirect to after logout")
 
@@ -365,7 +366,7 @@ func main() {
 
 		ClientID:     *clientID,
 		ClientSecret: *clientSecret,
-		Scope:        "openid profile email",
+		Scope:        *scope,
 
 		LoginURL: loginURL,
 		TokenURL: tokenURL,
