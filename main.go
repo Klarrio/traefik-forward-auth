@@ -1,13 +1,10 @@
 package main
 
 import (
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"net/url"
-	"path"
 	"strings"
 	"time"
 
@@ -15,6 +12,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/Klarrio/traefik-forward-auth/ttlmap"
+	"github.com/Klarrio/traefik-forward-auth/wellknownopenidconfiguration"
 )
 
 var (
@@ -59,6 +57,17 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if time.Now().After(mapItem.ExpiresAt()) {
+		logger.WithFields(logrus.Fields{
+			"secure-key": secureKey,
+			"expired-at": mapItem.ExpiresAt().String(),
+			"now":        time.Now().String(),
+		}).Debug("token for secure key expired, redirecting to auth")
+		fw.stateMap.Remove(secureKey) // cleanup
+		redirectToAuth(uri.Path, logger, w, r)
+		return
+	}
+
 	// We have the token available and we could resolve the map item, item not expired yet:
 	var tokenFromMapItem string
 	switch tval := mapItem.Value().(type) {
@@ -67,6 +76,24 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	default:
 		logger.Error("Expected the map item to contain a string token but received ", tval)
 		http.Error(w, "Internal server error", 500)
+		return
+	}
+
+	// Handle logout:
+	if fw.logoutPath != "" && uri.Path == fw.logoutPath {
+		logger.WithFields(logrus.Fields{
+			"logout-path":      fw.logoutPath,
+			"post-redirect-to": fw.postLogoutPath,
+		}).Error("handling logout ")
+		fw.stateMap.Remove(secureKey)
+		http.SetCookie(w, fw.ClearCookie(r, fw.CookieName))
+		if logoutError := fw.wellKnownOpenIDConfiguration.LogOut(fw.ClientID, tokenFromMapItem); logoutError != nil {
+			logger.WithFields(logrus.Fields{
+				"logout-error": logoutError,
+			}).Error("error while logging out")
+		}
+		r.Header.Set("X-Forwarded-Uri", fw.postLogoutPath)
+		redirectToAuth(uri.Path, logger, w, r)
 		return
 	}
 
@@ -86,8 +113,39 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Valid request
-	logger.Debug("Allowing valid request")
+	if fw.tokenValidatorEnabled {
+		validationResult, err := fw.wellKnownOpenIDConfiguration.ValidateToken(tokenFromMapItem)
+		var requirelogin bool
+		if err != nil {
+			logger.WithFields(logrus.Fields{
+				"error": err,
+			}).Error("Failed to validate token")
+			requirelogin = true
+		} else {
+			if !validationResult.Active {
+				logger.WithFields(logrus.Fields{
+					"result": validationResult,
+				}).Error("Token invalid, redirecting to auth")
+				requirelogin = true
+			}
+		}
+		if requirelogin {
+			fw.stateMap.Remove(secureKey)
+			http.SetCookie(w, fw.ClearCookie(r, fw.CookieName))
+			redirectToAuth(uri.Path, logger, w, r)
+			return
+		}
+		// Valid request
+		logger.WithFields(logrus.Fields{
+			"result": validationResult,
+		}).Debug("Allowing valid request")
+	} else {
+		// Valid request
+		logger.WithFields(logrus.Fields{
+			"validator-disabled": true,
+		}).Debug("Allowing valid request")
+	}
+
 	w.Header().Set("X-Forwarded-Access-Token", tokenFromMapItem)
 	w.WriteHeader(200)
 }
@@ -157,6 +215,11 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 	exp := bearerToken.ExpTime()
 	fw.stateMap.AddWithTTL(secureKey, token, exp.Sub(time.Now()))
 
+	logger.WithFields(logrus.Fields{
+		"expire-at": exp.String(),
+		"now":       time.Now().String(),
+	}).Debug("setting state cookie with expiry")
+
 	// Generate cookie
 	http.SetCookie(w, fw.MakeCookieWithExpiry(r, fw.CookieName, secureKey, exp))
 
@@ -180,6 +243,7 @@ func getValidCookieOrHandleRedirect(cookieName, uriPath string, logger *logrus.E
 		redirectToAuth(uriPath, logger, w, r)
 		return handled(true), content
 	}
+
 	// Validate cookie
 	valid, content, err := fw.ValidateCookie(r, c)
 	if !valid {
@@ -207,35 +271,6 @@ func redirectToAuth(uriPath string, logger *logrus.Entry, w http.ResponseWriter,
 	http.Redirect(w, r, fw.GetLoginURL(r, nonce), http.StatusTemporaryRedirect)
 }
 
-func getOidcConfig(oidc string, insecureCertificates bool) map[string]interface{} {
-	uri, err := url.Parse(oidc)
-	if err != nil {
-		log.Fatal("failed to parse oidc string: ", err)
-	}
-	uri.Path = path.Join(uri.Path, "/.well-known/openid-configuration")
-
-	// allow insecure certificates when enabled
-	client := http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: insecureCertificates},
-		},
-	}
-
-	res, err := client.Get(uri.String())
-	if err != nil {
-		log.Fatal("failed to get oidc parametere from oidc connect: ", err)
-	}
-	defer res.Body.Close()
-	body, err := ioutil.ReadAll(res.Body)
-	if err != nil {
-		log.Fatal("failed to read response body: ", err)
-	}
-	var result map[string]interface{}
-	json.Unmarshal(body, &result)
-	log.Debug(result)
-	return result
-}
-
 // Main
 func main() {
 	// Parse options
@@ -259,6 +294,11 @@ func main() {
 	umaAuthorization := flag.Bool("uma-authorization", false, "whether UMA-based authorization will be performed")
 	logLevel := flag.String("log-level", "warn", "Log level: trace, debug, info, warn, error, fatal, panic")
 	logFormat := flag.String("log-format", "text", "Log format: text, json, pretty")
+	tokenValidatorEnabled := flag.Bool("token-validator-enabled", true, "Log format: text, json, pretty")
+
+	scope := flag.String("scope", "openid profile email", "Requested scopes")
+	logoutPath := flag.String("logout-path", "", "Logout path, if empty, logout not enabled")
+	postLogoutPath := flag.String("post-logout-path", "", "Path to redirect to after logout")
 
 	flag.Parse()
 
@@ -273,22 +313,6 @@ func main() {
 	// Check for show stopper errors
 	if *clientID == "" || *clientSecret == "" || *secret == "" || *oidcIssuer == "" {
 		log.Fatal("client-id, client-secret, secret and oidc-issuer must all be set")
-	}
-
-	var oidcParams = getOidcConfig(*oidcIssuer, *insecureCertificates)
-
-	loginURL, err := url.Parse((oidcParams["authorization_endpoint"].(string)))
-	if err != nil {
-		log.Fatal("unable to parse login url: ", err)
-	}
-
-	tokenURL, err := url.Parse((oidcParams["token_endpoint"].(string)))
-	if err != nil {
-		log.Fatal("unable to parse token url: ", err)
-	}
-	userURL, err := url.Parse((oidcParams["userinfo_endpoint"].(string)))
-	if err != nil {
-		log.Fatal("unable to parse user url: ", err)
 	}
 
 	// Parse lists
@@ -314,6 +338,25 @@ func main() {
 		panic(err)
 	}
 
+	wellKnownOpenIDConfiguration, err := wellknownopenidconfiguration.ResolveWellKnownOpenIDConfiguration(log, *oidcIssuer, *clientID, *clientSecret)
+	if err != nil {
+		log.Fatal("unable to resolve .well-known/openid-configuration: ", err)
+	}
+
+	loginURL, err := url.Parse(wellKnownOpenIDConfiguration.AuthorizationEndpoint)
+	if err != nil {
+		log.Fatal("unable to parse login url: ", err)
+	}
+
+	tokenURL, err := url.Parse(wellKnownOpenIDConfiguration.TokenEndpoint)
+	if err != nil {
+		log.Fatal("unable to parse token url: ", err)
+	}
+	userURL, err := url.Parse(wellKnownOpenIDConfiguration.UserInfoEndpoint)
+	if err != nil {
+		log.Fatal("unable to parse user url: ", err)
+	}
+
 	// Setup
 	fw = &ForwardAuth{
 		Path:     fmt.Sprintf("/%s", *path),
@@ -323,7 +366,7 @@ func main() {
 
 		ClientID:     *clientID,
 		ClientSecret: *clientSecret,
-		Scope:        "openid profile email",
+		Scope:        *scope,
 
 		LoginURL: loginURL,
 		TokenURL: tokenURL,
@@ -342,7 +385,11 @@ func main() {
 		Prompt:           *prompt,
 		UMAAuthorization: *umaAuthorization,
 
-		stateMap: m,
+		stateMap:                     m,
+		wellKnownOpenIDConfiguration: wellKnownOpenIDConfiguration,
+		tokenValidatorEnabled:        *tokenValidatorEnabled,
+		postLogoutPath:               *postLogoutPath,
+		logoutPath:                   *logoutPath,
 	}
 
 	// Attach handler
