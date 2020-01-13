@@ -42,7 +42,8 @@ type ForwardAuth struct {
 	CookieName     string
 	CookieDomains  []CookieDomain
 	CSRFCookieName string
-	CookieSecure   bool
+
+	Secure bool
 
 	InsecureCertificates bool
 
@@ -304,7 +305,7 @@ func (f *ForwardAuth) ClearCSRFCookie(r *http.Request) *http.Cookie {
 		Path:     "/",
 		Domain:   f.csrfCookieDomain(r),
 		HttpOnly: true,
-		Secure:   f.CookieSecure,
+		Secure:   f.Secure,
 		Expires:  time.Now().Local().Add(time.Hour * -1),
 	}
 }
@@ -317,7 +318,7 @@ func (f *ForwardAuth) ClearCookie(r *http.Request, name string) *http.Cookie {
 		Path:     "/",
 		Domain:   f.cookieDomain(r),
 		HttpOnly: true,
-		Secure:   f.CookieSecure,
+		Secure:   f.Secure,
 		Expires:  time.Now().Local().Add(time.Hour * -1),
 	}
 }
@@ -336,7 +337,7 @@ func (f *ForwardAuth) MakeCSRFCookie(r *http.Request, nonce string) *http.Cookie
 		Path:     "/",
 		Domain:   f.csrfCookieDomain(r),
 		HttpOnly: true,
-		Secure:   f.CookieSecure,
+		Secure:   f.Secure,
 		Expires:  f.cookieExpiry(),
 	}
 }
@@ -351,7 +352,7 @@ func (f *ForwardAuth) MakeCookieWithExpiry(r *http.Request, name, content string
 		Path:     "/",
 		Domain:   f.cookieDomain(r),
 		HttpOnly: true,
-		Secure:   f.CookieSecure,
+		Secure:   f.Secure,
 		Expires:  expires,
 	}
 }

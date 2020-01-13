@@ -30,6 +30,14 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		"Headers": r.Header,
 	}).Debug("Handling request")
 
+	// Set security-related headers on the potential response
+	if fw.Secure {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+		w.Header().Set("Strict-Transport-Security", "max-age=15552000; includeSubDomains")
+	}
+
 	// Parse uri
 	uri, err := url.Parse(r.Header.Get("X-Forwarded-Uri"))
 	if err != nil {
@@ -286,7 +294,7 @@ func main() {
 	cSRFCookieName := flag.String("csrf-cookie-name", "_forward_auth_csrf", "CSRF Cookie Name")
 	cookieDomainList := flag.String("cookie-domains", "", "Comma separated list of cookie domains") //todo
 	cookieSecret := flag.String("cookie-secret", "", "Deprecated")
-	cookieSecure := flag.Bool("cookie-secure", true, "Use secure cookies")
+	secure := flag.Bool("secure", true, "Use secure configuration")
 	insecureCertificates := flag.Bool("insecure-certificates", false, "Allow insecure certificates")
 	domainList := flag.String("domain", "", "Comma separated list of email domains to allow")
 	emailWhitelist := flag.String("whitelist", "", "Comma separated list of emails to allow")
@@ -375,7 +383,8 @@ func main() {
 		CookieName:     *cookieName,
 		CSRFCookieName: *cSRFCookieName,
 		CookieDomains:  cookieDomains,
-		CookieSecure:   *cookieSecure,
+
+		Secure: *secure,
 
 		InsecureCertificates: *insecureCertificates,
 
