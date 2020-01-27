@@ -186,6 +186,12 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 
 	// Exchange code for token
 	token, err := fw.ExchangeCode(r, qs.Get("code"))
+
+	logger.WithFields(logrus.Fields{
+		"exchange-result": token,
+		"state":           state,
+	}).Warn("Exchange code result: ", err)
+
 	if err != nil {
 		logger.Error("Code exchange failed with: ", err)
 		http.Error(w, "Service unavailable", 503)
@@ -193,7 +199,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 	}
 
 	if fw.UMAAuthorization {
-		isAllowedAccess, err := fw.VerifyAccess(token)
+		isAllowedAccess, err := fw.VerifyAccess(token.AccessToken)
 		if err != nil {
 			logger.Error("Access verification failed with: ", err)
 			http.Error(w, "Service unavailable", 503)
@@ -206,7 +212,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 		}
 	}
 
-	bearerToken, err := bearerTokenFromWire(token)
+	bearerToken, err := bearerTokenFromWire(token.AccessToken)
 	if err != nil {
 		logger.Error("Error parsing bearer token '", token, "': ", err)
 		http.Error(w, "Bad request", 400)
@@ -232,7 +238,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 	http.SetCookie(w, fw.MakeCookieWithExpiry(r, fw.CookieName, secureKey, exp))
 
 	logger.WithFields(logrus.Fields{
-		"bearer-token-length": len(token),
+		"bearer-token-length": len(token.AccessToken),
 		"email-from-token":    bearerToken.Email,
 		"handler":             "handleCallback",
 	}).Info("Generated auth cookie")
