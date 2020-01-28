@@ -77,10 +77,10 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// We have the token available and we could resolve the map item, item not expired yet:
-	var tokenFromMapItem string
+	var storedToken *Token
 	switch tval := mapItem.Value().(type) {
-	case string:
-		tokenFromMapItem = tval
+	case *Token:
+		storedToken = tval
 	default:
 		logger.Error("Expected the map item to contain a string token but received ", tval)
 		http.Error(w, "Internal server error", 500)
@@ -88,24 +88,68 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Handle logout:
-	if fw.logoutPath != "" && uri.Path == fw.logoutPath {
+	if fw.LogoutPath != "" && uri.Path == fw.LogoutPath {
 		logger.WithFields(logrus.Fields{
-			"logout-path":      fw.logoutPath,
-			"post-redirect-to": fw.postLogoutPath,
-		}).Error("handling logout ")
+			"logout-path":      fw.LogoutPath,
+			"post-redirect-to": fw.PostLogoutPath,
+		}).Info("handling logout ")
 		fw.stateMap.Remove(secureKey)
 		http.SetCookie(w, fw.ClearCookie(r, fw.CookieName))
-		if logoutError := fw.wellKnownOpenIDConfiguration.LogOut(fw.ClientID, tokenFromMapItem); logoutError != nil {
+		if logoutError := fw.wellKnownOpenIDConfiguration.LogOut(fw.ClientID, storedToken.AccessToken); logoutError != nil {
 			logger.WithFields(logrus.Fields{
 				"logout-error": logoutError,
 			}).Error("error while logging out")
 		}
-		r.Header.Set("X-Forwarded-Uri", fw.postLogoutPath)
+		r.Header.Set("X-Forwarded-Uri", fw.PostLogoutPath)
 		redirectToAuth(uri.Path, logger, w, r)
 		return
 	}
 
-	bearerToken, err := bearerTokenFromWire(tokenFromMapItem)
+	// Handle token refresh:
+	if fw.RefreshPath != "" && uri.Path == fw.RefreshPath {
+		logger.WithFields(logrus.Fields{
+			"refresh-path": fw.RefreshPath,
+		}).Info("handling token refresh ")
+		fw.stateMap.Remove(secureKey)
+		http.SetCookie(w, fw.ClearCookie(r, fw.CookieName))
+
+		refreshedToken, refreshError := fw.wellKnownOpenIDConfiguration.TokenRefresh(fw.ClientID, fw.ClientSecret, storedToken.RefreshToken, fw.Scope)
+		if refreshError != nil {
+			logger.WithFields(logrus.Fields{
+				"refresh-token-error": refreshError,
+			}).Error("error while refreshing token")
+			http.Error(w, "Internal server error", 500)
+			return
+		}
+
+		refreshedBearerToken, err := bearerTokenFromWire(refreshedToken.AccessToken)
+		if err != nil {
+			logger.Error("Error parsing refreshed token '", refreshedToken, "': ", err)
+			http.Error(w, "Bad request", 400)
+			return
+		}
+
+		exp := refreshedBearerToken.ExpTime()
+		fw.stateMap.AddWithTTL(secureKey, &Token{
+			AccessToken:  refreshedToken.AccessToken,
+			TokenType:    refreshedToken.TokenType,
+			RefreshToken: refreshedToken.RefreshToken,
+			ExpiresIn:    refreshedToken.ExpiresIn,
+		}, exp.Sub(time.Now()))
+
+		logger.Info("Updated TTL map with refreshed token '", refreshedToken, "', setting the cookie")
+
+		// Generate cookie
+		http.SetCookie(w, fw.MakeCookieWithExpiry(r, fw.CookieName, secureKey, exp))
+
+		logger.Info("Redirecting after token refresh")
+
+		http.Redirect(w, r, fw.redirectBase(r), http.StatusTemporaryRedirect)
+		return
+
+	}
+
+	bearerToken, err := bearerTokenFromWire(storedToken.AccessToken)
 	if err != nil {
 		logger.Error("Error parsing stored token, reason ", err)
 		http.Error(w, "Internal server error", 500)
@@ -122,7 +166,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if fw.tokenValidatorEnabled {
-		validationResult, err := fw.wellKnownOpenIDConfiguration.ValidateToken(tokenFromMapItem)
+		validationResult, err := fw.wellKnownOpenIDConfiguration.ValidateToken(storedToken.AccessToken)
 		var requirelogin bool
 		if err != nil {
 			logger.WithFields(logrus.Fields{
@@ -154,7 +198,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		}).Debug("Allowing valid request")
 	}
 
-	w.Header().Set("X-Forwarded-Access-Token", tokenFromMapItem)
+	w.Header().Set("X-Forwarded-Access-Token", storedToken.AccessToken)
 	w.WriteHeader(200)
 }
 
@@ -184,13 +228,17 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 	// Clear CSRF cookie
 	http.SetCookie(w, fw.ClearCSRFCookie(r))
 
+	logger.WithFields(logrus.Fields{
+		"state": state,
+	}).Debug("About to exchange for code: ", err)
+
 	// Exchange code for token
 	token, err := fw.ExchangeCode(r, qs.Get("code"))
 
 	logger.WithFields(logrus.Fields{
 		"exchange-result": token,
 		"state":           state,
-	}).Warn("Exchange code result: ", err)
+	}).Debug("Exchange code result: ", err)
 
 	if err != nil {
 		logger.Error("Code exchange failed with: ", err)
@@ -313,6 +361,7 @@ func main() {
 	scope := flag.String("scope", "openid profile email", "Requested scopes")
 	logoutPath := flag.String("logout-path", "", "Logout path, if empty, logout not enabled")
 	postLogoutPath := flag.String("post-logout-path", "", "Path to redirect to after logout")
+	refreshPath := flag.String("refresh-path", "", "Token refresh path, if empty, token refresh not enabled")
 
 	flag.Parse()
 
@@ -403,8 +452,9 @@ func main() {
 		stateMap:                     m,
 		wellKnownOpenIDConfiguration: wellKnownOpenIDConfiguration,
 		tokenValidatorEnabled:        *tokenValidatorEnabled,
-		postLogoutPath:               *postLogoutPath,
-		logoutPath:                   *logoutPath,
+		PostLogoutPath:               *postLogoutPath,
+		LogoutPath:                   *logoutPath,
+		RefreshPath:                  *refreshPath,
 	}
 
 	// Attach handler

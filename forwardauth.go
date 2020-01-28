@@ -56,8 +56,9 @@ type ForwardAuth struct {
 	stateMap                     ttlmap.TTLMap
 	wellKnownOpenIDConfiguration *wellknownopenidconfiguration.WellKnownOpenIDConfiguration
 	tokenValidatorEnabled        bool
-	logoutPath                   string
-	postLogoutPath               string
+	LogoutPath                   string
+	PostLogoutPath               string
+	RefreshPath                  string
 }
 
 // Request Validation
