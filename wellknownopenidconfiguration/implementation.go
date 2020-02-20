@@ -66,6 +66,26 @@ func (t *TokenValidationResult) ToError() error {
 	return nil
 }
 
+// TokenRefreshResult represents the token refresh result.
+// When there was a problem refreshing the token, the value of Error will be non-empty.
+// Otherwise, the call was success.
+type TokenRefreshResult struct {
+	Error            string `json:"error"`
+	ErrorDescription string `json:"error_description"`
+	AccessToken      string `json:"access_token"`
+	TokenType        string `json:"token_type"`
+	RefreshToken     string `json:"refresh_token"`
+	ExpiresIn        int    `json:"expires_in"`
+}
+
+// ToError returns an error if Error was not empty, otherwise returns nil.
+func (t *TokenRefreshResult) ToError() error {
+	if len(t.Error) > 0 {
+		return fmt.Errorf("%s: %s", t.Error, t.ErrorDescription)
+	}
+	return nil
+}
+
 // ValidateToken validates given token.
 func (w *WellKnownOpenIDConfiguration) ValidateToken(token string) (*TokenValidationResult, error) {
 
@@ -127,6 +147,44 @@ func (w *WellKnownOpenIDConfiguration) LogOut(clientID, token string) error {
 	w.logger.Warn("token logged out", "response", string(responseBytes))
 
 	return nil
+}
+
+// TokenRefresh handles token refresh.
+func (w *WellKnownOpenIDConfiguration) TokenRefresh(clientID, clientSecret, refreshToken, scope string) (*TokenRefreshResult, error) {
+	form := url.Values{}
+	form.Add("client_id", clientID)
+	form.Add("client_secret", clientSecret)
+	form.Add("grant_type", "refresh_token")
+	form.Add("refresh_token", refreshToken)
+	form.Add("scope", scope)
+	requestBody := form.Encode()
+
+	request, requestError := http.NewRequest("POST", w.TokenEndpoint, bytes.NewBuffer([]byte(requestBody)))
+	if requestError != nil {
+		return nil, requestError
+	}
+
+	request.Header.Add("Content-Length", fmt.Sprintf("%d", len(requestBody)))
+	request.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+
+	authHeaderAdded := w.credentials.MaybeAddBasicAuth(request)
+
+	w.logger.Warn("token refresh", "with-auth", authHeaderAdded, "request-body-length", len(requestBody), "uri", w.TokenEndpoint)
+
+	httpClient := &http.Client{}
+	response, responseEError := httpClient.Do(request)
+	if responseEError != nil {
+		return nil, responseEError
+	}
+	responseBytes, responseBodyError := ioutil.ReadAll(response.Body)
+	if responseBodyError != nil {
+		return nil, responseBodyError
+	}
+	result := &TokenRefreshResult{}
+	if jsonError := json.Unmarshal(responseBytes, result); jsonError != nil {
+		return nil, jsonError
+	}
+	return result, result.ToError()
 }
 
 // ResolveWellKnownOpenIDConfiguration resolves the well known open ID configuration for a given realm.

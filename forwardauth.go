@@ -56,8 +56,9 @@ type ForwardAuth struct {
 	stateMap                     ttlmap.TTLMap
 	wellKnownOpenIDConfiguration *wellknownopenidconfiguration.WellKnownOpenIDConfiguration
 	tokenValidatorEnabled        bool
-	logoutPath                   string
-	postLogoutPath               string
+	LogoutPath                   string
+	PostLogoutPath               string
+	RefreshPath                  string
 }
 
 // Request Validation
@@ -155,11 +156,15 @@ func (f *ForwardAuth) GetLoginURL(r *http.Request, nonce string) string {
 // Token is the intermediate authorization token object
 // used for token deserialization during the token exchange.
 type Token struct {
-	Token string `json:"access_token"`
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"`
+	IDToken      string `json:"id_token"`
 }
 
 // ExchangeCode exchanges the authorization code for the token.
-func (f *ForwardAuth) ExchangeCode(r *http.Request, code string) (string, error) {
+func (f *ForwardAuth) ExchangeCode(r *http.Request, code string) (*Token, error) {
 	form := url.Values{}
 	form.Set("client_id", fw.ClientID)
 	form.Set("client_secret", fw.ClientSecret)
@@ -174,16 +179,17 @@ func (f *ForwardAuth) ExchangeCode(r *http.Request, code string) (string, error)
 		},
 	}
 
+	token := &Token{}
+
 	res, err := client.PostForm(fw.TokenURL.String(), form)
 	if err != nil {
-		return "", err
+		return token, err
 	}
 
-	var token Token
 	defer res.Body.Close()
-	err = json.NewDecoder(res.Body).Decode(&token)
+	err = json.NewDecoder(res.Body).Decode(token)
 
-	return token.Token, err
+	return token, err
 }
 
 // VerifyAccess checks whether access is allowed to all resources of the client using the UMA protocol.
