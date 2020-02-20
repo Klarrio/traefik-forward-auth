@@ -156,7 +156,14 @@ func TestHandler(t *testing.T) {
 	if err != nil {
 		t.Error("Expected the secret key to generate but got", err)
 	}
-	pseudoToken := getJWT(t, "test@example.com")
+	pseudoAccessToken := getJWT(t, "test@example.com")
+	pseudoToken := &Token{
+		AccessToken: pseudoAccessToken,
+		TokenType: "access_token",
+		RefreshToken: "",
+		ExpiresIn: 10000,
+		IDToken: "",
+	}
 	fw.stateMap.Add(secureKey, pseudoToken)
 
 	// Should validate email
@@ -182,7 +189,7 @@ func TestHandler(t *testing.T) {
 	bearerTokens := res.Header["X-Forwarded-Access-Token"]
 	if len(bearerTokens) != 1 {
 		t.Error("Valid request missing X-Forwarded-Access-Token header")
-	} else if bearerTokens[0] != pseudoToken {
+	} else if bearerTokens[0] != pseudoAccessToken {
 		t.Error("X-Forwarded-Access-Token should match test token, got:", bearerTokens[0])
 	}
 
