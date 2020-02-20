@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -367,6 +368,11 @@ func main() {
 
 	// Setup logger
 	log = CreateLogger(*logLevel, *logFormat)
+
+	// Setup insecure http calls if requested
+	if *insecureCertificates {
+		http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
 
 	// Backwards compatibility
 	if *secret == "" && *cookieSecret != "" {
