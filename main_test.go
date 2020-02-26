@@ -21,10 +21,11 @@ import (
  * Utilities
  */
 
-func getJWT(t *testing.T, email string) string {
+func getJWT(t *testing.T, email string, roles string) string {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"exp":   time.Now().Add(time.Duration(time.Second * 10)).Unix(),
 		"email": email,
+		"roles": roles,
 	})
 	tokenString, signError := token.SignedString([]byte("a-test-signing-key"))
 	if signError != nil {
@@ -38,7 +39,7 @@ type TokenValidUserServerHandler struct {
 }
 
 func (t *TokenValidUserServerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprint(w, fmt.Sprintf(`{"access_token":"%s"}`, getJWT(t.t, "example@example.com")))
+	fmt.Fprint(w, fmt.Sprintf(`{"access_token":"%s"}`, getJWT(t.t, "example@example.com", "")))
 }
 
 type UserServerHandler struct{}
@@ -118,6 +119,8 @@ func TestHandler(t *testing.T) {
 		CookieName: "cookie_test",
 		Lifetime:   time.Second * time.Duration(10),
 		stateMap:   ttlmap.NewWithTTL(time.Duration(time.Second * 10)),
+		AccessTokenRolesField: "roles",
+		AccessTokenRolesDelimiter: " ",
 	}
 
 	// Should redirect vanilla request to login url
@@ -156,7 +159,7 @@ func TestHandler(t *testing.T) {
 	if err != nil {
 		t.Error("Expected the secret key to generate but got", err)
 	}
-	pseudoAccessToken := getJWT(t, "test@example.com")
+	pseudoAccessToken := getJWT(t, "test@example.com", "account:read orders:read")
 	pseudoToken := &Token{
 		AccessToken: pseudoAccessToken,
 		TokenType: "access_token",
@@ -173,6 +176,28 @@ func TestHandler(t *testing.T) {
 	res, _ = httpRequest(req, c)
 	if res.StatusCode != 401 {
 		t.Error("Request with an email for unauthorized domain should shouldn't be authorised", res.StatusCode)
+	}
+
+	// Should deny requests where the OIDC access token does not contain one of the roles in 
+	// the X-Forward-Auth-Accepted-Roles header
+	req = newHTTPRequest("foo")
+	req.Header.Add("X-Forward-Auth-Accepted-Roles", "account:write,orders:write")
+	c = fw.MakeCookie(req, fw.CookieName, secureKey)
+	fw.Domain = []string{}
+	res, _ = httpRequest(req, c)
+	if res.StatusCode != 401 {
+		t.Error("sessions with only read roles in the access token should not be allowed to endpoints which require write access. got: ", res.StatusCode)
+	}
+
+	// Should allow requests where the OIDC access token contains one or more of the roles in 
+	// the X-Forward-Auth-Accepted-Roles header
+	req = newHTTPRequest("foo")
+	req.Header.Add("X-Forward-Auth-Accepted-Roles", "account:read,orders:write")
+	c = fw.MakeCookie(req, fw.CookieName, secureKey)
+	fw.Domain = []string{}
+	res, _ = httpRequest(req, c)
+	if res.StatusCode != 200 {
+		t.Error("sessions with one of the accepted roles in their access token should get access to the endpoint. got: ", res.StatusCode)
 	}
 
 	// Should allow valid request email

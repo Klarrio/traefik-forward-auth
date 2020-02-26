@@ -59,6 +59,9 @@ type ForwardAuth struct {
 	LogoutPath                   string
 	PostLogoutPath               string
 	RefreshPath                  string
+
+	AccessTokenRolesField		 string
+	AccessTokenRolesDelimiter	 string
 }
 
 // Request Validation

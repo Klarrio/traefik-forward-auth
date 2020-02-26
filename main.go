@@ -166,6 +166,46 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate whether the access token contains one of the request's accepted roles, if available in request header
+	acceptedRolesParam := r.Header.Get("X-Forward-Auth-Accepted-Roles")
+	if acceptedRolesParam != "" {
+		logger.Debug("validating accepted roles for request: " + acceptedRolesParam)
+		acceptedRoles := strings.Split(acceptedRolesParam, ",")
+		tokenClaims := make(map[string]interface{})
+		claimsBytes, err := payloadBytesFromJwt(storedToken.AccessToken)
+		if err != nil {
+			logger.Error("unable to parse token claims")
+			http.Error(w, "Internal server error", 500)
+		}
+		if err := json.Unmarshal(claimsBytes, &tokenClaims); err != nil {
+			logger.Error("unable to parse token claims")
+			http.Error(w, "Internal server error", 500)
+		}
+		
+		accessTokenRolesString, hasRoles := tokenClaims[fw.AccessTokenRolesField].(string)
+		if !hasRoles {
+			logger.Info("access token has no roles defined. not authorized.")
+			http.Error(w, "Not authorized", 401)
+		}	
+
+		accessTokenRoles := strings.Split(accessTokenRolesString, fw.AccessTokenRolesDelimiter)
+		hasRequiredRole := false
+		loopTokenRoles:
+		for _, tokenRole := range accessTokenRoles {
+			for _, acceptedRole := range acceptedRoles {
+				if tokenRole == acceptedRole {
+					hasRequiredRole = true
+					break loopTokenRoles
+				}
+			}
+		}
+
+		if !hasRequiredRole {
+			logger.Info("access token does not have one of the accepted roles")
+			http.Error(w, "Not authorized", 401)
+		}
+	}
+
 	if fw.tokenValidatorEnabled {
 		validationResult, err := fw.wellKnownOpenIDConfiguration.ValidateToken(storedToken.AccessToken)
 		var requirelogin bool
@@ -358,6 +398,8 @@ func main() {
 	logLevel := flag.String("log-level", "warn", "Log level: trace, debug, info, warn, error, fatal, panic")
 	logFormat := flag.String("log-format", "text", "Log format: text, json, pretty")
 	tokenValidatorEnabled := flag.Bool("token-validator-enabled", true, "Log format: text, json, pretty")
+	accessTokenRolesField := flag.String("access-token-roles-field", "", "Field name within the OIDC access token which contains the roles")
+	accessTokenRolesDelimiter := flag.String("access-token-roles-delimiter", "", "which delimiter is being used in the OIDC access token to define multiple roles")
 
 	scope := flag.String("scope", "openid profile email", "Requested scopes")
 	logoutPath := flag.String("logout-path", "", "Logout path, if empty, logout not enabled")
@@ -461,6 +503,9 @@ func main() {
 		PostLogoutPath:               *postLogoutPath,
 		LogoutPath:                   *logoutPath,
 		RefreshPath:                  *refreshPath,
+
+		AccessTokenRolesField:		  *accessTokenRolesField,
+		AccessTokenRolesDelimiter:    *accessTokenRolesDelimiter,
 	}
 
 	// Attach handler
