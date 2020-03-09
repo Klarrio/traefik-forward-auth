@@ -50,14 +50,9 @@ func bearerTokenFromWire(wireMessage string) (*BearerToken, error) {
 	// token comes from Keycloak, we store it in memory, serve it to the app.
 	// It should be the app's responsibility to validate.
 
-	parts := strings.Split(wireMessage, ".")
-	if len(parts) != 3 {
-		return nil, errors.New("invalid JWT token")
-	}
-
-	payloadBytes, base64DecodeError := base64.StdEncoding.WithPadding(base64.NoPadding).DecodeString(parts[1])
-	if base64DecodeError != nil {
-		return nil, base64DecodeError
+	payloadBytes, err := payloadBytesFromJwt(wireMessage)
+	if err != nil {
+		return nil, err
 	}
 
 	token := &BearerToken{}
@@ -65,4 +60,16 @@ func bearerTokenFromWire(wireMessage string) (*BearerToken, error) {
 		return nil, err
 	}
 	return token, nil
+}
+
+func payloadBytesFromJwt(wireMessage string) ([]byte, error) {
+	// we receive a JWT token, the format is:
+	// header.payload.signature
+
+	parts := strings.Split(wireMessage, ".")
+	if len(parts) != 3 {
+		return nil, errors.New("invalid JWT token")
+	}
+
+	return base64.StdEncoding.WithPadding(base64.NoPadding).DecodeString(parts[1])
 }

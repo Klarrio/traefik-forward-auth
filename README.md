@@ -87,6 +87,8 @@ The following configuration is supported:
 |-url-path|string|Callback URL (default "_oauth")|
 |-prompt|string|Space separated list of [OpenID prompt options](https://developers.google.com/identity/protocols/OpenIDConnect#prompt)|
 |-uma_authorization|bool|whether [UMA](https://docs.kantarainitiative.org/uma/wg/oauth-uma-grant-2.0-05.html)-based authorization will be performed (default false)|
+|-access-token-roles-field|string|Field name within the OIDC access token which contains the roles|
+|-access-token-roles-delimiter|string|which delimiter is being used in the OIDC access token to define multiple roles|
 |-log-level|string|Log level: trace, debug, info, warn, error, fatal, panic (default "warn")|
 |-log-format|string|Log format: text, json, pretty (default "text")|
 
@@ -122,6 +124,19 @@ You can supply a comma separated list of cookie domains, if the host of the orig
 For example, if cookie domain is `test.com` and a request comes in on `app1.test.com`, the cookie will be set for the whole `test.com` domain. As such, if another request is forwarded for authentication from `app2.test.com`, the original cookie will be sent and so the request will be allowed without further authentication.
 
 Beware however, if using cookie domains whilst running multiple instances of traefik/traefik-forward-auth for the same domain, the cookies will clash. You can fix this by using the same `cookie-secret` in both instances, or using a different `cookie-name` on each.
+
+## Per-Request Role Restriction
+You can limit access to requests based on one or more roles being present in the session's access token.  
+
+To define which roles are required to access a certain request, add the `X-Forward-Auth-Accepted-Roles` header to the request, with the comma-separated list of roles as its value.  
+If you want to do this per service, you can simply add the following label to your service's configuration (ex: docker-compose format), which Traefik will then pick up and it will add 
+the custom header to each request going to the traefik-forward-auth service:
+```
+traefik.frontend.headers.customRequestHeaders=X-Forward-Auth-Accepted-Roles:my-role-A,my-role-B
+```
+
+When the traefik-forward-auth service notices the `X-Forward-Auth-Accepted-Roles` header in an incoming request, it will verify whether *one of the* accepted roles is present in  the session's access token. Only when present it will allow the request, otherwise it will respond with a `401 Unauthorized".  
+Roles are not one of the standard claims within an OAuth access token, but traefik-forward-auth needs a way to figure out which roles are present in the access token. For this it uses the `access-token-roles-field` and `access-token-roles-delimiter` flags, which indicate how these roles can be parsed from the access token's claims.
 
 ## Operation Modes
 
