@@ -171,6 +171,39 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if fw.tokenValidatorEnabled {
+		validationResult, err := fw.wellKnownOpenIDConfiguration.ValidateToken(storedToken.AccessToken)
+		var requirelogin bool
+		if err != nil {
+			logger.WithFields(logrus.Fields{
+				"error": err,
+			}).Error("Failed to validate token")
+			requirelogin = true
+		} else {
+			if !validationResult.Active {
+				logger.WithFields(logrus.Fields{
+					"result": validationResult,
+				}).Error("Token invalid, redirecting to auth")
+				requirelogin = true
+			}
+		}
+		if requirelogin {
+			fw.stateMap.Remove(secureKey)
+			http.SetCookie(w, fw.ClearCookie(r, fw.CookieName))
+			redirectToAuth(uri.Path, logger, w, r)
+			return
+		}
+		// Valid request
+		logger.WithFields(logrus.Fields{
+			"result": validationResult,
+		}).Debug("Allowing valid request")
+	} else {
+		// Valid request
+		logger.WithFields(logrus.Fields{
+			"validator-disabled": true,
+		}).Debug("Allowing valid request")
+	}
+
 	// Validate whether the access token contains one of the request's accepted roles, if available in request header
 	acceptedRolesParam := r.Header.Get(acceptedRolesRequestHeader)
 	if acceptedRolesParam != "" {
@@ -204,39 +237,6 @@ func handler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Not authorized", 401)
 			return
 		}
-	}
-
-	if fw.tokenValidatorEnabled {
-		validationResult, err := fw.wellKnownOpenIDConfiguration.ValidateToken(storedToken.AccessToken)
-		var requirelogin bool
-		if err != nil {
-			logger.WithFields(logrus.Fields{
-				"error": err,
-			}).Error("Failed to validate token")
-			requirelogin = true
-		} else {
-			if !validationResult.Active {
-				logger.WithFields(logrus.Fields{
-					"result": validationResult,
-				}).Error("Token invalid, redirecting to auth")
-				requirelogin = true
-			}
-		}
-		if requirelogin {
-			fw.stateMap.Remove(secureKey)
-			http.SetCookie(w, fw.ClearCookie(r, fw.CookieName))
-			redirectToAuth(uri.Path, logger, w, r)
-			return
-		}
-		// Valid request
-		logger.WithFields(logrus.Fields{
-			"result": validationResult,
-		}).Debug("Allowing valid request")
-	} else {
-		// Valid request
-		logger.WithFields(logrus.Fields{
-			"validator-disabled": true,
-		}).Debug("Allowing valid request")
 	}
 
 	w.Header().Set("X-Forwarded-Access-Token", storedToken.AccessToken)
