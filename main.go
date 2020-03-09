@@ -21,6 +21,11 @@ var (
 	log logrus.FieldLogger
 )
 
+const (
+	// AcceptedRolesRequestHeader name of the request header which indicates the accepted roles
+	acceptedRolesRequestHeader = "X-Forward-Auth-Accepted-Roles"
+)
+
 // Primary handler
 func handler(w http.ResponseWriter, r *http.Request) {
 	// Logging setup
@@ -167,42 +172,37 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate whether the access token contains one of the request's accepted roles, if available in request header
-	acceptedRolesParam := r.Header.Get("X-Forward-Auth-Accepted-Roles")
+	acceptedRolesParam := r.Header.Get(acceptedRolesRequestHeader)
 	if acceptedRolesParam != "" {
-		logger.Debug("validating accepted roles for request: " + acceptedRolesParam)
+		logger.Debugf("validating accepted roles for request: %s", acceptedRolesParam)
 		acceptedRoles := strings.Split(acceptedRolesParam, ",")
 		tokenClaims := make(map[string]interface{})
 		claimsBytes, err := payloadBytesFromJwt(storedToken.AccessToken)
 		if err != nil {
 			logger.Error("unable to parse token claims")
 			http.Error(w, "Internal server error", 500)
+			return
 		}
 		if err := json.Unmarshal(claimsBytes, &tokenClaims); err != nil {
 			logger.Error("unable to parse token claims")
 			http.Error(w, "Internal server error", 500)
+			return
 		}
 		
 		accessTokenRolesString, hasRoles := tokenClaims[fw.AccessTokenRolesField].(string)
 		if !hasRoles {
 			logger.Info("access token has no roles defined. not authorized.")
 			http.Error(w, "Not authorized", 401)
+			return
 		}	
 
+		logger.Debugf("access token roles: %s", accessTokenRolesString)
 		accessTokenRoles := strings.Split(accessTokenRolesString, fw.AccessTokenRolesDelimiter)
-		hasRequiredRole := false
-		loopTokenRoles:
-		for _, tokenRole := range accessTokenRoles {
-			for _, acceptedRole := range acceptedRoles {
-				if tokenRole == acceptedRole {
-					hasRequiredRole = true
-					break loopTokenRoles
-				}
-			}
-		}
 
-		if !hasRequiredRole {
+		if !hasRequiredRole(accessTokenRoles, acceptedRoles) {
 			logger.Info("access token does not have one of the accepted roles")
 			http.Error(w, "Not authorized", 401)
+			return
 		}
 	}
 
@@ -241,6 +241,19 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("X-Forwarded-Access-Token", storedToken.AccessToken)
 	w.WriteHeader(200)
+}
+
+// Verifies whether one of the acceptedRoles exist in the accessTokenRoles
+func hasRequiredRole(accessTokenRoles []string, acceptedRoles []string) bool {
+	for _, tokenRole := range accessTokenRoles {
+		for _, acceptedRole := range acceptedRoles {
+			if tokenRole == acceptedRole {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // Authenticate user after they have come back from oidc
