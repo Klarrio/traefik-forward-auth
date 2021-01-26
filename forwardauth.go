@@ -355,7 +355,7 @@ func (f *ForwardAuth) MakeSessionAuthCookie(r *http.Request, content string) *ht
 
 func (f *ForwardAuth) MakeSessionInfoCookie(r *http.Request, content string) *http.Cookie {
 	expires := f.cookieExpiry()
-	value := fmt.Sprintf("%d|%s", expires.Unix(), content)
+	value := base64.URLEncoding.EncodeToString([]byte(fmt.Sprintf("%d|%s", expires.Unix(), content)))
 	return f.MakeCookieWithExpiry(r, f.InfoCookieName, value, expires, false)
 }
 

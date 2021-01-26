@@ -344,7 +344,7 @@ func startSession(w http.ResponseWriter, r *http.Request, token *Token, logger l
 
 	// Generate cookies
 	sessionAuthCookie := fw.MakeSessionAuthCookie(r, secureKey)
-	sessionInfoCookie := fw.MakeSessionInfoCookie(r, secureKey)
+	sessionInfoCookie := fw.MakeSessionInfoCookie(r, bearerToken.Name)
 	http.SetCookie(w, sessionAuthCookie)
 	http.SetCookie(w, sessionInfoCookie)
 
