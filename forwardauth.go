@@ -42,6 +42,7 @@ type ForwardAuth struct {
 	CookieName     string
 	CookieDomains  []CookieDomain
 	CSRFCookieName string
+	InfoCookieName string
 
 	Secure bool
 
@@ -56,9 +57,9 @@ type ForwardAuth struct {
 	stateMap                     ttlmap.TTLMap
 	wellKnownOpenIDConfiguration *wellknownopenidconfiguration.WellKnownOpenIDConfiguration
 	tokenValidatorEnabled        bool
+	tokenMinValidity        	 time.Duration
 	LogoutPath                   string
 	PostLogoutPath               string
-	RefreshPath                  string
 
 	AccessTokenRolesField		 string
 	AccessTokenRolesDelimiter	 string
@@ -66,8 +67,8 @@ type ForwardAuth struct {
 
 // Request Validation
 
-// ValidateCookie validates cookies using the following formula: Cookie = hash(secret, cookie domain, content, expires)|expires|content
-func (f *ForwardAuth) ValidateCookie(r *http.Request, c *http.Cookie) (bool, string, error) {
+// ValidateSessionAuthCookie validates cookies using the following formula: Cookie = hash(secret, cookie domain, content, expires)|expires|content
+func (f *ForwardAuth) ValidateSessionAuthCookie(r *http.Request, c *http.Cookie) (bool, string, error) {
 	parts := strings.Split(c.Value, "|")
 
 	if len(parts) != 3 {
@@ -332,12 +333,6 @@ func (f *ForwardAuth) ClearCookie(r *http.Request, name string) *http.Cookie {
 	}
 }
 
-// MakeCookie creates a cookie of a given name with given content.
-// Uses default cookie expiry.
-func (f *ForwardAuth) MakeCookie(r *http.Request, name, content string) *http.Cookie {
-	return f.MakeCookieWithExpiry(r, name, content, f.cookieExpiry())
-}
-
 // MakeCSRFCookie creates a CSRF cookie (used during login only)
 func (f *ForwardAuth) MakeCSRFCookie(r *http.Request, nonce string) *http.Cookie {
 	return &http.Cookie{
@@ -351,16 +346,27 @@ func (f *ForwardAuth) MakeCSRFCookie(r *http.Request, nonce string) *http.Cookie
 	}
 }
 
-// MakeCookieWithExpiry creates a cookie of a given name with given content, with explicit expiry.
-func (f *ForwardAuth) MakeCookieWithExpiry(r *http.Request, name, content string, expires time.Time) *http.Cookie {
+func (f *ForwardAuth) MakeSessionAuthCookie(r *http.Request, content string) *http.Cookie {
+	expires := f.cookieExpiry()
 	mac := f.cookieSignature(r, content, fmt.Sprintf("%d", expires.Unix()))
 	value := fmt.Sprintf("%s|%d|%s", mac, expires.Unix(), content)
+	return f.MakeCookieWithExpiry(r, f.CookieName, value, expires, true)
+}
+
+func (f *ForwardAuth) MakeSessionInfoCookie(r *http.Request, content string) *http.Cookie {
+	expires := f.cookieExpiry()
+	value := fmt.Sprintf("%d|%s", expires.Unix(), content)
+	return f.MakeCookieWithExpiry(r, f.InfoCookieName, value, expires, false)
+}
+
+// MakeCookieWithExpiry creates a cookie of a given name with given content, with explicit expiry.
+func (f *ForwardAuth) MakeCookieWithExpiry(r *http.Request, name, value string, expires time.Time, httpOnly bool) *http.Cookie {
 	return &http.Cookie{
 		Name:     name,
 		Value:    value,
 		Path:     "/",
 		Domain:   f.cookieDomain(r),
-		HttpOnly: true,
+		HttpOnly: httpOnly,
 		Secure:   f.Secure,
 		Expires:  expires,
 	}

@@ -1,55 +1,26 @@
-[cookbookurl]: https://geek-cookbook.funkypenguin.co.nz
-[kitchenurl]: https://discourse.kitchen.funkypenguin.co.nz
-[discordurl]: http://chat.funkypenguin.co.nz
-[patreonurl]: https://patreon.com/funkypenguin
-[blogurl]: https://www.funkypenguin.co.nz
-[hub]: https://hub.docker.com/r/funkypenguin/poor-mans-k8s-lb/
+# What is Klarrio/traefik-forward-auth ?
 
-[![geek-cookbook](https://raw.githubusercontent.com/funkypenguin/www.funkypenguin.co.nz/master/images/geek-kitchen-banner.png)][cookbookurl]
+A fork of https://github.com/geek-cookbook/traefik-forward-auth, which is in turn a fork of https://github.com/noelcatt/traefik-forward-auth, which is in turn a fork of @thomseddon's traefik-forward-auth.
 
-# Contents
+Some history:  
 
-1. [What is funkypenguin/poor-mans-k8s-lb?](#what-is-funkypenguin-poor-mans-k8s-lb)
-2. [Why should I use this?](#why-should-i-use-this)
-3. [How do I use it?](#how-do-i-use-this)
-4. [CHANGELOG](#changelog)
+1. @thomseddon's version supports only Google OIDC
+2. @noelcatt's version supports any OIDC, but doesn't have a docker image build pipeline setup.
+3. funkypenguin's version has a docker image build pipeline
 
----
+Klarrio's fork adds the following (among other tweaks):  
 
-This container is maintained by [Funky Penguin's Geek Cookbook][cookbookurl], a collection of "recipes" to run popular applications
-on Docker Swarm or Kubernetes, in a cheeky, geek format.
+- Automatic refresh of access tokens using the refresh token
+- validation of the access token with the OIDC server, using the token introspection endpoint
+- Addition of an "info" cookie, which is set along with the authentication cookie (HttpOnly on), that is accessible from Javascript (HttpOnly off). It contains the session timeout and the user's name.
+- [UMA](https://docs.kantarainitiative.org/uma/wg/oauth-uma-grant-2.0-05.html) based authorization
 
-Got more details at:
-* ![Discourse with us!](https://img.shields.io/discourse/https/discourse.geek-kitchen.funkypenguin.co.nz/topics.svg) [Forums][kitchenurl]
-* ![Chat with us!](https://img.shields.io/discord/396055506072109067.svg) [Friendly Discord Chat][discordurl]
-* ![Geek out with us!](https://img.shields.io/badge/recipies-35+-brightgreen.svg) [Funky Penguin's Geek Cookbook][cookbookurl]
-* ![Thank YOU](https://img.shields.io/badge/thank-you-brightgreen.svg) [Patreon][patreonurl]
-* ![Read blog!](https://img.shields.io/badge/read-blog-brightgreen.svg) [Blog][blogurl]
-
----
-
-# What is funkypenguin/traefik-forward-auth ?
-
-A fork of https://github.com/noelcatt/traefik-forward-auth, which is in turn a fork of https://github.com/thomseddon/traefik-forward-auth.
-
-Why all the forkery? @thomseddon's version supports only Google OIDC, while @noelcatt's version supports any OIDC, but doesn't have a docker image build pipeline setup. At some point, I hope thaht @thomseddon's version will be extended to support multiple OIDCs, but until then, I'll maintain my own copy.
-
-[![Build Status](https://travis-ci.org/funkypenguin/traefik-forward-auth.svg?branch=master)](https://travis-ci.org/funkypenguin/traefik-forward-auth) [![Go Report Card](https://goreportcard.com/badge/github.com/funkypenguin/traefik-forward-auth)](https://goreportcard.com/badge/github.com/funkypenguin/traefik-forward-auth)
-
-
-# Why should I use this?
-
-
-# How do I use this?
-
-# CHANGELOG
-
-# Upstream README
+These additions have been primarily tested with a Keycloak IAM server, so your mileage may vary with other OIDC servers.
 
 
 # Traefik Forward Auth [![Build Status](https://travis-ci.org/funkypenguin/traefik-forward-auth.svg?branch=master)](https://travis-ci.org/funkypenguin/traefik-forward-auth) [![Go Report Card](https://goreportcard.com/badge/github.com/funkypenguin/traefik-forward-auth)](https://goreportcard.com/badge/github.com/funkypenguin/traefik-forward-auth)
 
-A minimal forward authentication service that provides Google oauth based login and authentication for the traefik reverse proxy.
+A forward authentication service that provides OAuth based login and authentication for the Traefik reverse proxy.
 
 
 ## Why?
@@ -77,7 +48,8 @@ The following configuration is supported:
 |-config|string|Path to config file|
 |-auth-host|string|Central auth login (see below)|
 |-cookie-domains|string|Comma separated list of cookie domains (see below)|
-|-cookie-name|string|Cookie Name (default "_forward_auth")|
+|-cookie-name|string|Authentication Cookie Name (default "_forward_auth")|
+|-info-cookie-name|string|Info Cookie Name (default "_forward_auth_info")|
 |-cookie-secure|bool|Use secure cookies (default true)|
 |-csrf-cookie-name|string|CSRF Cookie Name (default "_forward_auth_csrf")|
 |-insecure-certificates|bool|Allow insecure certificates (default false)|
@@ -87,6 +59,8 @@ The following configuration is supported:
 |-url-path|string|Callback URL (default "_oauth")|
 |-prompt|string|Space separated list of [OpenID prompt options](https://developers.google.com/identity/protocols/OpenIDConnect#prompt)|
 |-uma_authorization|bool|whether [UMA](https://docs.kantarainitiative.org/uma/wg/oauth-uma-grant-2.0-05.html)-based authorization will be performed (default false)|
+|-token-validator-enabled|bool|whether to validate the access token with the openid server on every request (default true)|
+|-token-min-validity-seconds|int|when the access token's validity will expire within this period, it will be refreshed using the refresh token (default 10)|
 |-access-token-roles-field|string|Field name within the OIDC access token which contains the roles|
 |-access-token-roles-delimiter|string|which delimiter is being used in the OIDC access token to define multiple roles|
 |-log-level|string|Log level: trace, debug, info, warn, error, fatal, panic (default "warn")|
@@ -138,6 +112,19 @@ traefik.frontend.headers.customRequestHeaders=X-Forward-Auth-Accepted-Roles:my-r
 When the traefik-forward-auth service notices the `X-Forward-Auth-Accepted-Roles` header in an incoming request, it will verify whether *one of the* accepted roles is present in  the session's access token. Only when present it will allow the request, otherwise it will respond with a `401 Unauthorized".  
 Roles are not one of the standard claims within an OAuth access token, but traefik-forward-auth needs a way to figure out which roles are present in the access token. For this it uses the `access-token-roles-field` and `access-token-roles-delimiter` flags, which indicate how these roles can be parsed from the access token's claims.
 
+## Automatic access token refresh
+On every request, the access token for the active session is verified for expiry. If it is about to expire, it will be automatically refreshed with a call to the 
+openid token endpoint (`grant_type` with value `refresh_token`), using the refresh token that was previously acquired. The session is destroyed when the access token refresh fails.  
+You can configure the minimum token validity with the `token-min-validity-seconds` configuration property.
+
+## Session
+When a user has successfully authenticated with the OIDC server, the forward-auth server starts a session.  
+It places two cookies (name customizable):  
+
+- Authentication cookie: This cookie is used by the traefik-forward-auth server to verify the session. It is placed with the `HttpOnly` setting, meaning that it can't be accessed from Javascript.
+- Info cookie: this cookie is placed purely for informative reasons towards the application, for the duration of the session. It contains the session expiration time and the name of the user. This cookie 
+  can be accessed from Javascript, for example to verify whether the session is still active.
+
 ## Operation Modes
 
 #### Overlay
@@ -174,7 +161,8 @@ Two criteria must be met for an `auth-host` to be used:
 ## Copyright
 
 2018 Thom Seddon
+2020 Klarrio
 
 ## License
 
-[MIT](https://github.com/thomseddon/traefik-forward-auth/blob/master/LICENSE.md)
+[MIT](LICENSE.md)

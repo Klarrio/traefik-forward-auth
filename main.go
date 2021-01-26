@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -65,26 +66,26 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mapItem, hadItem := fw.stateMap.Get(secureKey)
+	session, hadItem := fw.stateMap.Get(secureKey)
 	if !hadItem {
 		redirectToAuth(uri.Path, logger, w, r)
 		return
 	}
 
-	if time.Now().After(mapItem.ExpiresAt()) {
+	if time.Now().After(session.ExpiresAt()) {
 		logger.WithFields(logrus.Fields{
 			"secure-key": secureKey,
-			"expired-at": mapItem.ExpiresAt().String(),
+			"expired-at": session.ExpiresAt().String(),
 			"now":        time.Now().String(),
 		}).Debug("token for secure key expired, redirecting to auth")
-		fw.stateMap.Remove(secureKey) // cleanup
+		endSession(secureKey, w, r)
 		redirectToAuth(uri.Path, logger, w, r)
 		return
 	}
 
 	// We have the token available and we could resolve the map item, item not expired yet:
 	var storedToken *Token
-	switch tval := mapItem.Value().(type) {
+	switch tval := session.Value().(type) {
 	case *Token:
 		storedToken = tval
 	default:
@@ -111,55 +112,81 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	bearerToken, err := bearerTokenFromWire(storedToken.AccessToken)
+	if err != nil {
+		logger.Error("Error parsing stored token, reason ", err)
+		http.Error(w, "Internal server error", 500)
+		return
+	}
+
 	// Handle token refresh:
-	if fw.RefreshPath != "" && uri.Path == fw.RefreshPath {
-		logger.WithFields(logrus.Fields{
-			"refresh-path": fw.RefreshPath,
-		}).Info("handling token refresh ")
-		fw.stateMap.Remove(secureKey)
-		http.SetCookie(w, fw.ClearCookie(r, fw.CookieName))
+	isAboutToExpire := (bearerToken.Exp - time.Now().Unix()) < (fw.tokenMinValidity.Milliseconds() / 1000) // expires in less then tokenMinValidity
+	if isAboutToExpire {
+		logger.Info("access token about to expire or expired, refreshing using refresh token")
 
 		refreshedToken, refreshError := fw.wellKnownOpenIDConfiguration.TokenRefresh(fw.ClientID, fw.ClientSecret, storedToken.RefreshToken, fw.Scope)
 		if refreshError != nil {
 			logger.WithFields(logrus.Fields{
 				"refresh-token-error": refreshError,
 			}).Error("error while refreshing token")
-			http.Error(w, "Internal server error", 500)
+			endSession(secureKey, w, r) // end the session when the access token can't be refreshed
+			redirectToAuth(uri.Path, logger, w, r)
 			return
 		}
 
 		refreshedBearerToken, err := bearerTokenFromWire(refreshedToken.AccessToken)
 		if err != nil {
 			logger.Error("Error parsing refreshed token '", refreshedToken, "': ", err)
-			http.Error(w, "Bad request", 400)
+			http.Error(w, "Internal server error", 500)
 			return
 		}
 
-		exp := refreshedBearerToken.ExpTime()
-		fw.stateMap.AddWithTTL(secureKey, &Token{
+		exp := session.ExpiresAt().Sub(time.Now())
+		newTokenEntry := &Token{
 			AccessToken:  refreshedToken.AccessToken,
 			TokenType:    refreshedToken.TokenType,
 			RefreshToken: refreshedToken.RefreshToken,
 			ExpiresIn:    refreshedToken.ExpiresIn,
-		}, exp.Sub(time.Now()))
+		}
+		fw.stateMap.AddWithTTL(secureKey, newTokenEntry, exp)
 
-		logger.Info("Updated TTL map with refreshed token '", refreshedToken, "', setting the cookie")
+		storedToken = newTokenEntry
+		bearerToken = refreshedBearerToken
 
-		// Generate cookie
-		http.SetCookie(w, fw.MakeCookieWithExpiry(r, fw.CookieName, secureKey, exp))
-
-		logger.Info("Redirecting after token refresh")
-
-		http.Redirect(w, r, fw.redirectBase(r), http.StatusTemporaryRedirect)
-		return
-
-	}
-
-	bearerToken, err := bearerTokenFromWire(storedToken.AccessToken)
-	if err != nil {
-		logger.Error("Error parsing stored token, reason ", err)
-		http.Error(w, "Internal server error", 500)
-		return
+		logger.Info("Updated TTL map with refreshed token '", refreshedToken, "'")
+	} else {
+		// Handle token validation:
+		if fw.tokenValidatorEnabled {
+			validationResult, err := fw.wellKnownOpenIDConfiguration.ValidateToken(storedToken.AccessToken)
+			var requirelogin bool
+			if err != nil {
+				logger.WithFields(logrus.Fields{
+					"error": err,
+				}).Error("Failed to validate token")
+				requirelogin = true
+			} else {
+				if !validationResult.Active {
+					logger.WithFields(logrus.Fields{
+						"result": validationResult,
+					}).Error("Token invalid, redirecting to auth")
+					requirelogin = true
+				}
+			}
+			if requirelogin {
+				endSession(secureKey, w, r)
+				redirectToAuth(uri.Path, logger, w, r)
+				return
+			}
+			// Valid request
+			logger.WithFields(logrus.Fields{
+				"result": validationResult,
+			}).Debug("Allowing valid request")
+		} else {
+			// Valid request
+			logger.WithFields(logrus.Fields{
+				"validator-disabled": true,
+			}).Debug("Allowing valid request")
+		}
 	}
 
 	// Validate user
@@ -169,39 +196,6 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		}).Error("Invalid email in stored token")
 		http.Error(w, "Not authorized", 401)
 		return
-	}
-
-	if fw.tokenValidatorEnabled {
-		validationResult, err := fw.wellKnownOpenIDConfiguration.ValidateToken(storedToken.AccessToken)
-		var requirelogin bool
-		if err != nil {
-			logger.WithFields(logrus.Fields{
-				"error": err,
-			}).Error("Failed to validate token")
-			requirelogin = true
-		} else {
-			if !validationResult.Active {
-				logger.WithFields(logrus.Fields{
-					"result": validationResult,
-				}).Error("Token invalid, redirecting to auth")
-				requirelogin = true
-			}
-		}
-		if requirelogin {
-			fw.stateMap.Remove(secureKey)
-			http.SetCookie(w, fw.ClearCookie(r, fw.CookieName))
-			redirectToAuth(uri.Path, logger, w, r)
-			return
-		}
-		// Valid request
-		logger.WithFields(logrus.Fields{
-			"result": validationResult,
-		}).Debug("Allowing valid request")
-	} else {
-		// Valid request
-		logger.WithFields(logrus.Fields{
-			"validator-disabled": true,
-		}).Debug("Allowing valid request")
 	}
 
 	// Validate whether the access token contains one of the request's accepted roles, if available in request header
@@ -314,42 +308,59 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 		}
 	}
 
-	bearerToken, err := bearerTokenFromWire(token.AccessToken)
+	err = startSession(w, r, token, logger)
 	if err != nil {
-		logger.Error("Error parsing bearer token '", token, "': ", err)
-		http.Error(w, "Bad request", 400)
-		return
-	}
-
-	secureKey, err := getSecureKey()
-	if err != nil {
-		logger.Error("Failed to fetch secure key: ", err)
 		http.Error(w, "Internal server error", 500)
 		return
 	}
-
-	exp := bearerToken.ExpTime()
-	fw.stateMap.AddWithTTL(secureKey, token, exp.Sub(time.Now()))
-
-	logger.WithFields(logrus.Fields{
-		"expire-at": exp.String(),
-		"now":       time.Now().String(),
-	}).Debug("setting state cookie with expiry")
-
-	// Generate cookie
-	http.SetCookie(w, fw.MakeCookieWithExpiry(r, fw.CookieName, secureKey, exp))
-
-	logger.WithFields(logrus.Fields{
-		"bearer-token-length": len(token.AccessToken),
-		"email-from-token":    bearerToken.Email,
-		"handler":             "handleCallback",
-	}).Info("Generated auth cookie")
 
 	// Redirect
 	http.Redirect(w, r, redirect, http.StatusTemporaryRedirect)
 }
 
 type handled bool
+
+func startSession(w http.ResponseWriter, r *http.Request, token *Token, logger logrus.FieldLogger) error {
+	bearerToken, err := bearerTokenFromWire(token.AccessToken)
+	if err != nil {
+		logger.Error("Error parsing bearer token '", token, "': ", err)
+		return errors.New(fmt.Sprintf("Failed to fetch secure key: %s", err))
+	}
+
+	expiry := fw.cookieExpiry()
+
+	secureKey, err := getSecureKey()
+	if err != nil {
+		logger.Error("Failed to fetch secure key: ", err)
+		return errors.New(fmt.Sprintf("Failed to fetch secure key: %s", err))
+	}
+
+	fw.stateMap.AddWithTTL(secureKey, token, expiry.Sub(time.Now()))
+
+	logger.WithFields(logrus.Fields{
+		"expire-at": expiry.String(),
+		"now":       time.Now().String(),
+	}).Debug("setting state cookie with expiry")
+
+	// Generate cookies
+	sessionAuthCookie := fw.MakeSessionAuthCookie(r, secureKey)
+	sessionInfoCookie := fw.MakeSessionInfoCookie(r, secureKey)
+	http.SetCookie(w, sessionAuthCookie)
+	http.SetCookie(w, sessionInfoCookie)
+
+	logger.WithFields(logrus.Fields{
+		"bearer-token-length": len(token.AccessToken),
+		"email-from-token":    bearerToken.Email,
+	}).Info("Generated auth cookie")
+
+	return nil
+}
+
+func endSession(secureKey string, w http.ResponseWriter, r *http.Request) {
+	fw.stateMap.Remove(secureKey) // cleanup
+	http.SetCookie(w, fw.ClearCookie(r, fw.CookieName))
+	http.SetCookie(w, fw.ClearCookie(r, fw.InfoCookieName))
+}
 
 func getValidCookieOrHandleRedirect(cookieName, uriPath string, logger *logrus.Entry, w http.ResponseWriter, r *http.Request) (handled, string) {
 	// Get the cookie
@@ -361,7 +372,7 @@ func getValidCookieOrHandleRedirect(cookieName, uriPath string, logger *logrus.E
 	}
 
 	// Validate cookie
-	valid, content, err := fw.ValidateCookie(r, c)
+	valid, content, err := fw.ValidateSessionAuthCookie(r, c)
 	if !valid {
 		logger.Error("Invalid cookie: ", err)
 		http.Error(w, "Not authorized", 401)
@@ -373,8 +384,7 @@ func getValidCookieOrHandleRedirect(cookieName, uriPath string, logger *logrus.E
 func redirectToAuth(uriPath string, logger *logrus.Entry, w http.ResponseWriter, r *http.Request) {
 	// Error indicates no cookie, generate nonce
 	nonce, err := fw.Nonce()
-	if err != nil {
-		logger.Error("Error generating nonce: ", err)
+	if err != nil {		logger.Error("Error generating nonce: ", err)
 		http.Error(w, "Service unavailable", 503)
 		return
 	}
@@ -400,6 +410,7 @@ func main() {
 	clientSecret := flag.String("client-secret", "", "Client Secret (required)")
 	cookieName := flag.String("cookie-name", "_forward_auth", "Cookie Name")
 	cSRFCookieName := flag.String("csrf-cookie-name", "_forward_auth_csrf", "CSRF Cookie Name")
+	infoCookieName := flag.String("info-cookie-name", "_forward_auth_info", "Info Cookie Name")
 	cookieDomainList := flag.String("cookie-domains", "", "Comma separated list of cookie domains") //todo
 	cookieSecret := flag.String("cookie-secret", "", "Deprecated")
 	secure := flag.Bool("secure", true, "Use secure configuration")
@@ -410,14 +421,14 @@ func main() {
 	umaAuthorization := flag.Bool("uma-authorization", false, "whether UMA-based authorization will be performed")
 	logLevel := flag.String("log-level", "warn", "Log level: trace, debug, info, warn, error, fatal, panic")
 	logFormat := flag.String("log-format", "text", "Log format: text, json, pretty")
-	tokenValidatorEnabled := flag.Bool("token-validator-enabled", true, "Log format: text, json, pretty")
+	tokenValidatorEnabled := flag.Bool("token-validator-enabled", true, "Whether the access token should be validated on each request")
+	tokenMinValiditySeconds := flag.Int("token-min-validity-seconds", 10, "when the access token isn't valid for x seconds anymore, it will be refreshed on a request")
 	accessTokenRolesField := flag.String("access-token-roles-field", "", "Field name within the OIDC access token which contains the roles")
 	accessTokenRolesDelimiter := flag.String("access-token-roles-delimiter", "", "which delimiter is being used in the OIDC access token to define multiple roles")
 
 	scope := flag.String("scope", "openid profile email", "Requested scopes")
 	logoutPath := flag.String("logout-path", "", "Logout path, if empty, logout not enabled")
 	postLogoutPath := flag.String("post-logout-path", "", "Path to redirect to after logout")
-	refreshPath := flag.String("refresh-path", "", "Token refresh path, if empty, token refresh not enabled")
 
 	flag.Parse()
 
@@ -498,6 +509,7 @@ func main() {
 
 		CookieName:     *cookieName,
 		CSRFCookieName: *cSRFCookieName,
+		InfoCookieName: *infoCookieName,
 		CookieDomains:  cookieDomains,
 
 		Secure: *secure,
@@ -513,9 +525,9 @@ func main() {
 		stateMap:                     m,
 		wellKnownOpenIDConfiguration: wellKnownOpenIDConfiguration,
 		tokenValidatorEnabled:        *tokenValidatorEnabled,
+		tokenMinValidity:			  time.Second * time.Duration(*tokenMinValiditySeconds),
 		PostLogoutPath:               *postLogoutPath,
 		LogoutPath:                   *logoutPath,
-		RefreshPath:                  *refreshPath,
 
 		AccessTokenRolesField:		  *accessTokenRolesField,
 		AccessTokenRolesDelimiter:    *accessTokenRolesDelimiter,
