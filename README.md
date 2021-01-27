@@ -80,7 +80,7 @@ Click, "Create Credentials" > "OAuth client ID". Select "Web Application", fill 
 
 ## Usage
 
-The authenticated user is set in the `X-Forwarded-User` header, to pass this on add this to the `authResponseHeaders` as shown [here](https://github.com/thomseddon/traefik-forward-auth/blob/master/example/docker-compose-dev.yml).
+The user's access token is set in the `X-Forwarded-Access-Token` header, to pass this on add this to the `authResponseHeaders` as shown [here](https://github.com/thomseddon/traefik-forward-auth/blob/master/example/docker-compose-dev.yml).
 
 ## User Restriction
 
@@ -124,6 +124,8 @@ It places two cookies (name customizable):
 - Authentication cookie: This cookie is used by the traefik-forward-auth server to verify the session. It is placed with the `HttpOnly` setting, meaning that it can't be accessed from Javascript.
 - Info cookie: this cookie is placed purely for informative reasons towards the application, for the duration of the session. It contains the session expiration time and the name of the user. This cookie 
   can be accessed from Javascript, for example to verify whether the session is still active.
+
+![Session lifecycle](docs/traefik-forward-auth-session-lifecycle.png)
 
 ## Operation Modes
 
