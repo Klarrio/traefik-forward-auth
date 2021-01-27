@@ -18,7 +18,7 @@ Klarrio's fork adds the following (among other tweaks):
 These additions have been primarily tested with a Keycloak IAM server, so your mileage may vary with other OIDC servers.
 
 
-# Traefik Forward Auth [![Build Status](https://travis-ci.org/funkypenguin/traefik-forward-auth.svg?branch=master)](https://travis-ci.org/funkypenguin/traefik-forward-auth) [![Go Report Card](https://goreportcard.com/badge/github.com/funkypenguin/traefik-forward-auth)](https://goreportcard.com/badge/github.com/funkypenguin/traefik-forward-auth)
+# Traefik Forward Auth
 
 A forward authentication service that provides OAuth based login and authentication for the Traefik reverse proxy.
 
@@ -109,7 +109,7 @@ the custom header to each request going to the traefik-forward-auth service:
 traefik.frontend.headers.customRequestHeaders=X-Forward-Auth-Accepted-Roles:my-role-A,my-role-B
 ```
 
-When the traefik-forward-auth service notices the `X-Forward-Auth-Accepted-Roles` header in an incoming request, it will verify whether *one of the* accepted roles is present in  the session's access token. Only when present it will allow the request, otherwise it will respond with a `401 Unauthorized".  
+When the traefik-forward-auth service notices the `X-Forward-Auth-Accepted-Roles` header in an incoming request, it will verify whether *one of the* accepted roles is present in  the session's access token. Only when present it will allow the request, otherwise it will respond with a `401 Unauthorized`.  
 Roles are not one of the standard claims within an OAuth access token, but traefik-forward-auth needs a way to figure out which roles are present in the access token. For this it uses the `access-token-roles-field` and `access-token-roles-delimiter` flags, which indicate how these roles can be parsed from the access token's claims.
 
 ## Automatic access token refresh
@@ -162,7 +162,7 @@ Two criteria must be met for an `auth-host` to be used:
 
 ## Copyright
 
-2018 Thom Seddon
+2018 Thom Seddon  
 2020 Klarrio
 
 ## License
