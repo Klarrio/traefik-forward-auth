@@ -5,54 +5,53 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
-const cookieName = "testCookie"
-
-func TestValidateCookie(t *testing.T) {
+func TestValidateSessionAuthCookie(t *testing.T) {
 	fw = &ForwardAuth{}
 	r, _ := http.NewRequest("GET", "http://example.com", nil)
 	c := &http.Cookie{}
 
 	// Should require 3 parts
 	c.Value = ""
-	valid, _, err := fw.ValidateCookie(r, c)
+	valid, _, err := fw.ValidateSessionAuthCookie(r, c)
 	if valid || err.Error() != "Invalid cookie format" {
 		t.Error("Should get \"Invalid cookie format\", got:", err)
 	}
 	c.Value = "1|2"
-	valid, _, err = fw.ValidateCookie(r, c)
+	valid, _, err = fw.ValidateSessionAuthCookie(r, c)
 	if valid || err.Error() != "Invalid cookie format" {
 		t.Error("Should get \"Invalid cookie format\", got:", err)
 	}
 	c.Value = "1|2|3|4"
-	valid, _, err = fw.ValidateCookie(r, c)
+	valid, _, err = fw.ValidateSessionAuthCookie(r, c)
 	if valid || err.Error() != "Invalid cookie format" {
 		t.Error("Should get \"Invalid cookie format\", got:", err)
 	}
 
 	// Should catch invalid mac
 	c.Value = "MQ==|2|3"
-	valid, _, err = fw.ValidateCookie(r, c)
+	valid, _, err = fw.ValidateSessionAuthCookie(r, c)
 	if valid || !strings.HasPrefix(err.Error(), "Invalid cookie mac") {
 		t.Error("Should get \"Invalid cookie mac\", got:", err)
 	}
 
 	// Should catch expired
 	fw.Lifetime = time.Second * time.Duration(-1)
-	c = fw.MakeCookie(r, cookieName, "test@test.com")
-	valid, _, err = fw.ValidateCookie(r, c)
+	c = fw.MakeSessionAuthCookie(r, "test@test.com")
+	valid, _, err = fw.ValidateSessionAuthCookie(r, c)
 	if valid || err.Error() != "Cookie has expired" {
 		t.Error("Should get \"Cookie has expired\", got:", err)
 	}
 
 	// Should accept valid cookie
 	fw.Lifetime = time.Second * time.Duration(10)
-	c = fw.MakeCookie(r, cookieName, "test@test.com")
-	valid, email, err := fw.ValidateCookie(r, c)
+	c = fw.MakeSessionAuthCookie(r, "test@test.com")
+	valid, email, err := fw.ValidateSessionAuthCookie(r, c)
 	if !valid {
 		t.Error("Valid request should return as valid")
 	}
@@ -290,9 +289,31 @@ func TestGetLoginURL(t *testing.T) {
 // func TestGetUser(t *testing.T) {
 // }
 
-// TODO? Tested in TestValidateCookie
+// TODO? Tested in TestValidateSessionAuthCookie
 // func TestMakeCookie(t *testing.T) {
 // }
+
+func TestMakeSessionInfoCookie(t *testing.T) {
+	r, _ := http.NewRequest("GET", "http://app.example.com", nil)
+
+	c := fw.MakeSessionInfoCookie(r, "user@test.com")
+	parts := strings.Split(c.Value, "|")
+	if len(parts) != 2 {
+		t.Error("Info cookie value should have two parts")
+	}
+
+	expires, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		t.Errorf("Unable to parse cookie expiry: %s", err)
+	}
+
+	expiresTime := time.Unix(expires, 0)
+	thenSecondsBeforeCookieExpiry := fw.cookieExpiry().Add(-time.Second * 10)
+	thenSecondsAfterCookieExpiry := fw.cookieExpiry().Add(time.Second * 10)
+	if expiresTime.Before(thenSecondsBeforeCookieExpiry) || expiresTime.After(thenSecondsAfterCookieExpiry){
+		t.Errorf("cookie expiry time not within 10 second time window: %s", expiresTime.String())
+	}
+}
 
 func TestMakeCSRFCookie(t *testing.T) {
 	r, _ := http.NewRequest("GET", "http://app.example.com", nil)

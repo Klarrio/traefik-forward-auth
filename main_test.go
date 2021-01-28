@@ -118,6 +118,7 @@ func TestHandler(t *testing.T) {
 		},
 		CookieName: "cookie_test",
 		Lifetime:   time.Second * time.Duration(10),
+		tokenMinValidity: time.Second * 2,
 		stateMap:   ttlmap.NewWithTTL(time.Duration(time.Second * 10)),
 		AccessTokenRolesField: "roles",
 		AccessTokenRolesDelimiter: " ",
@@ -137,7 +138,7 @@ func TestHandler(t *testing.T) {
 	// Should handle invalid cookie
 	req = newHTTPRequest("foo")
 
-	c := fw.MakeCookie(req, fw.CookieName, "non-existing-secret-key")
+	c := fw.MakeSessionAuthCookie(req, "non-existing-secret-key")
 	parts := strings.Split(c.Value, "|")
 	c.Value = fmt.Sprintf("bad|%s|%s", parts[1], parts[2])
 
@@ -148,7 +149,7 @@ func TestHandler(t *testing.T) {
 
 	// Should handle non existing secret key
 	req = newHTTPRequest("foo")
-	c = fw.MakeCookie(req, fw.CookieName, "non-existing-secret-key")
+	c = fw.MakeSessionAuthCookie(req, "non-existing-secret-key")
 	res, _ = httpRequest(req, c)
 	if res.StatusCode != 307 {
 		t.Error("Request with non existing secret key should be redirected to auth, got:", res.StatusCode)
@@ -171,7 +172,7 @@ func TestHandler(t *testing.T) {
 
 	// Should validate email
 	req = newHTTPRequest("foo")
-	c = fw.MakeCookie(req, fw.CookieName, secureKey)
+	c = fw.MakeSessionAuthCookie(req, secureKey)
 	fw.Domain = []string{"test.com"}
 	res, _ = httpRequest(req, c)
 	if res.StatusCode != 401 {
@@ -182,7 +183,7 @@ func TestHandler(t *testing.T) {
 	// the X-Forward-Auth-Accepted-Roles header
 	req = newHTTPRequest("foo")
 	req.Header.Add("X-Forward-Auth-Accepted-Roles", "account:write,orders:write")
-	c = fw.MakeCookie(req, fw.CookieName, secureKey)
+	c = fw.MakeSessionAuthCookie(req, secureKey)
 	fw.Domain = []string{}
 	res, _ = httpRequest(req, c)
 	if res.StatusCode != 401 {
@@ -193,7 +194,7 @@ func TestHandler(t *testing.T) {
 	// the X-Forward-Auth-Accepted-Roles header
 	req = newHTTPRequest("foo")
 	req.Header.Add("X-Forward-Auth-Accepted-Roles", "account:read,orders:write")
-	c = fw.MakeCookie(req, fw.CookieName, secureKey)
+	c = fw.MakeSessionAuthCookie(req, secureKey)
 	fw.Domain = []string{}
 	res, _ = httpRequest(req, c)
 	if res.StatusCode != 200 {
@@ -202,7 +203,7 @@ func TestHandler(t *testing.T) {
 
 	// Should allow valid request email
 	req = newHTTPRequest("foo")
-	c = fw.MakeCookie(req, fw.CookieName, secureKey)
+	c = fw.MakeSessionAuthCookie(req, secureKey)
 	fw.Domain = []string{}
 
 	res, _ = httpRequest(req, c)
@@ -226,7 +227,7 @@ func TestHandler(t *testing.T) {
 	fw.stateMap.AddWithTTL(shortLivedSecureKey, pseudoToken, time.Second)
 
 	req = newHTTPRequest("foo")
-	c = fw.MakeCookie(req, fw.CookieName, shortLivedSecureKey)
+	c = fw.MakeSessionAuthCookie(req, shortLivedSecureKey)
 	fw.Domain = []string{}
 	res, _ = httpRequest(req, c)
 	if res.StatusCode != 200 {
@@ -236,7 +237,7 @@ func TestHandler(t *testing.T) {
 	<-time.After(time.Duration(time.Second * 2))
 
 	req = newHTTPRequest("foo")
-	c = fw.MakeCookie(req, fw.CookieName, shortLivedSecureKey)
+	c = fw.MakeSessionAuthCookie(req, shortLivedSecureKey)
 	fw.Domain = []string{}
 	res, _ = httpRequest(req, c)
 	if res.StatusCode != 307 {
