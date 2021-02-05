@@ -1,10 +1,10 @@
 package main
 
 import (
+	"encoding/base64"
 	// "fmt"
 	"net/http"
 	"net/url"
-	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -98,7 +98,7 @@ func TestValidateEmail(t *testing.T) {
 	}
 }
 
-func TestGetLoginURL(t *testing.T) {
+func TestRedirectURI(t *testing.T) {
 	r, _ := http.NewRequest("GET", "http://example.com", nil)
 	r.Header.Add("X-Forwarded-Proto", "http")
 	r.Header.Add("X-Forwarded-Host", "example.com")
@@ -106,43 +106,21 @@ func TestGetLoginURL(t *testing.T) {
 
 	fw = &ForwardAuth{
 		Path:         "/_oauth",
-		ClientID:     "idtest",
-		ClientSecret: "sectest",
-		Scope:        "scopetest",
-		LoginURL: &url.URL{
-			Scheme: "https",
-			Host:   "test.com",
-			Path:   "/auth",
-		},
 	}
 
 	// Check url
-	uri, err := url.Parse(fw.GetLoginURL(r, "nonce"))
+	uri, err := url.Parse(fw.redirectURI(r))
 	if err != nil {
-		t.Error("Error parsing login url:", err)
+		t.Error("Error parsing redirect url:", err)
 	}
-	if uri.Scheme != "https" {
-		t.Error("Expected login Scheme to be \"https\", got:", uri.Scheme)
+	if uri.Scheme != "http" {
+		t.Error("Expected redirect Scheme to be \"http\", got:", uri.Scheme)
 	}
-	if uri.Host != "test.com" {
-		t.Error("Expected login Host to be \"test.com\", got:", uri.Host)
+	if uri.Host != "example.com" {
+		t.Error("Expected redirect Host to be \"example.com\", got:", uri.Host)
 	}
-	if uri.Path != "/auth" {
-		t.Error("Expected login Path to be \"/auth\", got:", uri.Path)
-	}
-
-	// Check query string
-	qs := uri.Query()
-	expectedQs := url.Values{
-		"client_id":     []string{"idtest"},
-		"redirect_uri":  []string{"http://example.com/_oauth"},
-		"response_type": []string{"code"},
-		"scope":         []string{"scopetest"},
-		"state":         []string{"nonce:http://example.com/hello"},
-	}
-	if !reflect.DeepEqual(qs, expectedQs) {
-		t.Error("Incorrect login query string:")
-		qsDiff(expectedQs, qs)
+	if uri.Path != "/_oauth" {
+		t.Error("Expected redirect Path to be \"/_oauth\", got:", uri.Path)
 	}
 
 	//
@@ -152,45 +130,21 @@ func TestGetLoginURL(t *testing.T) {
 	fw = &ForwardAuth{
 		Path:         "/_oauth",
 		AuthHost:     "auth.example.com",
-		ClientID:     "idtest",
-		ClientSecret: "sectest",
-		Scope:        "scopetest",
-		LoginURL: &url.URL{
-			Scheme: "https",
-			Host:   "test.com",
-			Path:   "/auth",
-		},
-		Prompt: "consent select_account",
 	}
 
 	// Check url
-	uri, err = url.Parse(fw.GetLoginURL(r, "nonce"))
+	uri, err = url.Parse(fw.redirectURI(r))
 	if err != nil {
-		t.Error("Error parsing login url:", err)
+		t.Error("Error parsing redirect url:", err)
 	}
-	if uri.Scheme != "https" {
-		t.Error("Expected login Scheme to be \"https\", got:", uri.Scheme)
+	if uri.Scheme != "http" {
+		t.Error("Expected redirect Scheme to be \"http\", got:", uri.Scheme)
 	}
-	if uri.Host != "test.com" {
-		t.Error("Expected login Host to be \"test.com\", got:", uri.Host)
+	if uri.Host != "example.com" {
+		t.Error("Expected redirect Host to be \"example.com\", got:", uri.Host)
 	}
-	if uri.Path != "/auth" {
-		t.Error("Expected login Path to be \"/auth\", got:", uri.Path)
-	}
-
-	// Check query string
-	qs = uri.Query()
-	expectedQs = url.Values{
-		"client_id":     []string{"idtest"},
-		"redirect_uri":  []string{"http://example.com/_oauth"},
-		"response_type": []string{"code"},
-		"scope":         []string{"scopetest"},
-		"prompt":        []string{"consent select_account"},
-		"state":         []string{"nonce:http://example.com/hello"},
-	}
-	if !reflect.DeepEqual(qs, expectedQs) {
-		t.Error("Incorrect login query string:")
-		qsDiff(expectedQs, qs)
+	if uri.Path != "/_oauth" {
+		t.Error("Expected redirect Path to be \"/_oauth\", got:", uri.Path)
 	}
 
 	//
@@ -200,45 +154,22 @@ func TestGetLoginURL(t *testing.T) {
 	fw = &ForwardAuth{
 		Path:         "/_oauth",
 		AuthHost:     "auth.example.com",
-		ClientID:     "idtest",
-		ClientSecret: "sectest",
-		Scope:        "scopetest",
-		LoginURL: &url.URL{
-			Scheme: "https",
-			Host:   "test.com",
-			Path:   "/auth",
-		},
 		CookieDomains: []CookieDomain{*cookieDomain},
 	}
 
 	// Check url
-	uri, err = url.Parse(fw.GetLoginURL(r, "nonce"))
+	uri, err = url.Parse(fw.redirectURI(r))
 	if err != nil {
-		t.Error("Error parsing login url:", err)
+		t.Error("Error parsing redirect url:", err)
 	}
-	if uri.Scheme != "https" {
-		t.Error("Expected login Scheme to be \"https\", got:", uri.Scheme)
+	if uri.Scheme != "http" {
+		t.Error("Expected redirect Scheme to be \"http\", got:", uri.Scheme)
 	}
-	if uri.Host != "test.com" {
-		t.Error("Expected login Host to be \"test.com\", got:", uri.Host)
+	if uri.Host != "auth.example.com" {
+		t.Error("Expected redirect Host to be \"auth.example.com\", got:", uri.Host)
 	}
-	if uri.Path != "/auth" {
-		t.Error("Expected login Path to be \"/auth\", got:", uri.Path)
-	}
-
-	// Check query string
-	qs = uri.Query()
-	expectedQs = url.Values{
-		"client_id":     []string{"idtest"},
-		"redirect_uri":  []string{"http://auth.example.com/_oauth"},
-		"response_type": []string{"code"},
-		"scope":         []string{"scopetest"},
-		"state":         []string{"nonce:http://example.com/hello"},
-	}
-	qsDiff(expectedQs, qs)
-	if !reflect.DeepEqual(qs, expectedQs) {
-		t.Error("Incorrect login query string:")
-		qsDiff(expectedQs, qs)
+	if uri.Path != "/_oauth" {
+		t.Error("Expected redirect Path to be \"/_oauth\", got:", uri.Path)
 	}
 
 	//
@@ -251,43 +182,20 @@ func TestGetLoginURL(t *testing.T) {
 	r.Header.Add("X-Forwarded-Uri", "/hello")
 
 	// Check url
-	uri, err = url.Parse(fw.GetLoginURL(r, "nonce"))
+	uri, err = url.Parse(fw.redirectURI(r))
 	if err != nil {
-		t.Error("Error parsing login url:", err)
+		t.Error("Error parsing redirect url:", err)
 	}
-	if uri.Scheme != "https" {
-		t.Error("Expected login Scheme to be \"https\", got:", uri.Scheme)
+	if uri.Scheme != "http" {
+		t.Error("Expected redirect Scheme to be \"http\", got:", uri.Scheme)
 	}
-	if uri.Host != "test.com" {
-		t.Error("Expected login Host to be \"test.com\", got:", uri.Host)
+	if uri.Host != "another.com" {
+		t.Error("Expected redirect Host to be \"another.com\", got:", uri.Host)
 	}
-	if uri.Path != "/auth" {
-		t.Error("Expected login Path to be \"/auth\", got:", uri.Path)
-	}
-
-	// Check query string
-	qs = uri.Query()
-	expectedQs = url.Values{
-		"client_id":     []string{"idtest"},
-		"redirect_uri":  []string{"http://another.com/_oauth"},
-		"response_type": []string{"code"},
-		"scope":         []string{"scopetest"},
-		"state":         []string{"nonce:http://another.com/hello"},
-	}
-	qsDiff(expectedQs, qs)
-	if !reflect.DeepEqual(qs, expectedQs) {
-		t.Error("Incorrect login query string:")
-		qsDiff(expectedQs, qs)
+	if uri.Path != "/_oauth" {
+		t.Error("Expected redirect Path to be \"/_oauth\", got:", uri.Path)
 	}
 }
-
-// TODO
-// func TestExchangeCode(t *testing.T) {
-// }
-
-// TODO
-// func TestGetUser(t *testing.T) {
-// }
 
 // TODO? Tested in TestValidateSessionAuthCookie
 // func TestMakeCookie(t *testing.T) {
@@ -297,7 +205,8 @@ func TestMakeSessionInfoCookie(t *testing.T) {
 	r, _ := http.NewRequest("GET", "http://app.example.com", nil)
 
 	c := fw.MakeSessionInfoCookie(r, "user@test.com")
-	parts := strings.Split(c.Value, "|")
+	decodedValueBytes, _ := base64.URLEncoding.DecodeString(c.Value)
+	parts := strings.Split(string(decodedValueBytes), "|")
 	if len(parts) != 2 {
 		t.Error("Info cookie value should have two parts")
 	}
