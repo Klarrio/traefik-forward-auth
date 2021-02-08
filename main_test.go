@@ -2,6 +2,9 @@ package main
 
 import (
 	"fmt"
+	"github.com/Klarrio/traefik-forward-auth/session"
+	"github.com/Klarrio/traefik-forward-auth/util"
+	oidc "github.com/Klarrio/traefik-forward-auth/wellknownopenidconfiguration"
 	"time"
 
 	// "reflect"
@@ -11,8 +14,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-
-	"github.com/Klarrio/traefik-forward-auth/ttlmap"
 
 	"github.com/dgrijalva/jwt-go"
 )
@@ -54,7 +55,7 @@ func (t *UserServerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func init() {
-	log = CreateLogger("panic", "")
+	log = util.CreateLogger("panic", "")
 }
 
 func httpRequest(r *http.Request, c *http.Cookie) (*http.Response, string) {
@@ -84,42 +85,33 @@ func newHTTPRequest(uri string) *http.Request {
 	return r
 }
 
-func qsDiff(one, two url.Values) {
-	for k := range one {
-		if two.Get(k) == "" {
-			fmt.Printf("Key missing: %s\n", k)
-		}
-		if one.Get(k) != two.Get(k) {
-			fmt.Printf("Value different for %s: expected: '%s' got: '%s'\n", k, one.Get(k), two.Get(k))
-		}
-	}
-	for k := range two {
-		if one.Get(k) == "" {
-			fmt.Printf("Extra key: %s\n", k)
-		}
-	}
-}
-
 /**
  * Tests
  */
 
 func TestHandler(t *testing.T) {
 
+	oidcApi = oidc.NewWellKnownOpenIDConfiguration(
+		log,
+		&oidc.OIDCClientCredentials{
+			ClientID:     "idtest",
+			ClientSecret: "sectest",
+		},
+		"scopetest",
+		"prompttest")
+
+	oidcApi.AuthorizationEndpoint = "http://test.com/auth"
+	oidcApi.TokenEndpoint = "http://test.com/token"
+	oidcApi.UserInfoEndpoint = "http://test.com/user"
+	oidcApi.Resolve()
+
+	sessionInventory = session.NewInventory(oidcApi, false, log)
+
 	fw = &ForwardAuth{
 		Path:         "_oauth",
-		ClientID:     "idtest",
-		ClientSecret: "sectest",
-		Scope:        "scopetest",
-		LoginURL: &url.URL{
-			Scheme: "http",
-			Host:   "test.com",
-			Path:   "/auth",
-		},
 		CookieName: "cookie_test",
 		Lifetime:   time.Second * time.Duration(10),
 		tokenMinValidity: time.Second * 2,
-		stateMap:   ttlmap.NewWithTTL(time.Duration(time.Second * 10)),
 		AccessTokenRolesField: "roles",
 		AccessTokenRolesDelimiter: " ",
 	}
@@ -161,14 +153,14 @@ func TestHandler(t *testing.T) {
 		t.Error("Expected the secret key to generate but got", err)
 	}
 	pseudoAccessToken := getJWT(t, "test@example.com", "account:read orders:read")
-	pseudoToken := &Token{
+	pseudoToken := &oidc.Token{
 		AccessToken: pseudoAccessToken,
 		TokenType: "access_token",
 		RefreshToken: "",
 		ExpiresIn: 10000,
 		IDToken: "",
 	}
-	fw.stateMap.Add(secureKey, pseudoToken)
+	sessionInventory.StoreSession(secureKey, pseudoToken, time.Now().Local().Add(time.Second * 60))
 
 	// Should validate email
 	req = newHTTPRequest("foo")
@@ -224,7 +216,7 @@ func TestHandler(t *testing.T) {
 	if err != nil {
 		t.Error("Expected the secret key to generate but got", err)
 	}
-	fw.stateMap.AddWithTTL(shortLivedSecureKey, pseudoToken, time.Second)
+	sessionInventory.StoreSession(shortLivedSecureKey, pseudoToken, time.Now().Local().Add(time.Second))
 
 	req = newHTTPRequest("foo")
 	c = fw.MakeSessionAuthCookie(req, shortLivedSecureKey)
@@ -247,18 +239,25 @@ func TestHandler(t *testing.T) {
 
 func TestCallback(t *testing.T) {
 
+	oidcApi = oidc.NewWellKnownOpenIDConfiguration(
+		log,
+		&oidc.OIDCClientCredentials{
+			ClientID:     "idtest",
+			ClientSecret: "sectest",
+		},
+		"scopetest",
+		"prompttest")
+
+	oidcApi.AuthorizationEndpoint = "http://test.com/auth"
+	oidcApi.TokenEndpoint = "http://test.com/token"
+	oidcApi.UserInfoEndpoint = "http://test.com/user"
+	oidcApi.Resolve()
+
+	sessionInventory = session.NewInventory(oidcApi, false, log)
+
 	fw = &ForwardAuth{
 		Path:         "_oauth",
-		ClientID:     "idtest",
-		ClientSecret: "sectest",
-		Scope:        "scopetest",
-		LoginURL: &url.URL{
-			Scheme: "http",
-			Host:   "test.com",
-			Path:   "/auth",
-		},
 		CSRFCookieName: "csrf_test",
-		stateMap:       ttlmap.NewWithTTL(time.Duration(time.Second * 10)),
 	}
 
 	// Setup valid user token server
@@ -274,7 +273,8 @@ func TestCallback(t *testing.T) {
 	userServer := httptest.NewServer(userServerHandler)
 	defer userServer.Close()
 	userURL, _ := url.Parse(userServer.URL)
-	fw.UserURL = userURL
+	oidcApi.UserInfoEndpoint = userURL.String()
+	oidcApi.Resolve()
 
 	// Should pass auth response request to callback
 	req := newHTTPRequest("_oauth")
@@ -292,7 +292,8 @@ func TestCallback(t *testing.T) {
 	}
 
 	// Should redirect valid request
-	fw.TokenURL = tokenValidUserURL
+	oidcApi.TokenEndpoint = tokenValidUserURL.String()
+	oidcApi.Resolve()
 
 	req = newHTTPRequest("_oauth?state=12345678901234567890123456789012:http://redirect")
 	c = fw.MakeCSRFCookie(req, "12345678901234567890123456789012")

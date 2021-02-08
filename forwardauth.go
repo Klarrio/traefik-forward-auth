@@ -4,19 +4,13 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/tls"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/Klarrio/traefik-forward-auth/ttlmap"
-	"github.com/Klarrio/traefik-forward-auth/wellknownopenidconfiguration"
 )
 
 const (
@@ -29,14 +23,6 @@ type ForwardAuth struct {
 	Lifetime time.Duration
 	Secret   []byte
 
-	ClientID     string
-	ClientSecret string `json:"-"`
-	Scope        string
-
-	LoginURL *url.URL
-	TokenURL *url.URL
-	UserURL  *url.URL
-
 	AuthHost string
 
 	CookieName     string
@@ -46,17 +32,11 @@ type ForwardAuth struct {
 
 	Secure bool
 
-	InsecureCertificates bool
-
 	Domain    []string
 	Whitelist []string
 
-	Prompt           string
 	UMAAuthorization bool
 
-	stateMap                     ttlmap.TTLMap
-	wellKnownOpenIDConfiguration *wellknownopenidconfiguration.WellKnownOpenIDConfiguration
-	tokenValidatorEnabled        bool
 	tokenMinValidity        	 time.Duration
 	LogoutPath                   string
 	PostLogoutPath               string
@@ -130,136 +110,6 @@ func (f *ForwardAuth) ValidateEmail(email string) bool {
 	}
 
 	return found
-}
-
-// OAuth Methods
-
-// GetLoginURL gets the login URL for the service.
-func (f *ForwardAuth) GetLoginURL(r *http.Request, nonce string) string {
-	state := fmt.Sprintf("%s:%s", nonce, f.returnURL(r))
-
-	q := url.Values{}
-	q.Set("client_id", fw.ClientID)
-	q.Set("response_type", "code")
-	q.Set("scope", fw.Scope)
-	if fw.Prompt != "" {
-		q.Set("prompt", fw.Prompt)
-	}
-	q.Set("redirect_uri", f.redirectURI(r))
-	q.Set("state", state)
-
-	var u url.URL
-	u = *fw.LoginURL
-	u.RawQuery = q.Encode()
-
-	return u.String()
-}
-
-// Exchange code for token
-
-// Token is the intermediate authorization token object
-// used for token deserialization during the token exchange.
-type Token struct {
-	AccessToken  string `json:"access_token"`
-	TokenType    string `json:"token_type"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    int    `json:"expires_in"`
-	IDToken      string `json:"id_token"`
-}
-
-// ExchangeCode exchanges the authorization code for the token.
-func (f *ForwardAuth) ExchangeCode(r *http.Request, code string) (*Token, error) {
-	form := url.Values{}
-	form.Set("client_id", fw.ClientID)
-	form.Set("client_secret", fw.ClientSecret)
-	form.Set("grant_type", "authorization_code")
-	form.Set("redirect_uri", f.redirectURI(r))
-	form.Set("code", code)
-
-	// allow insecure certificates when enabled
-	client := http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: f.InsecureCertificates},
-		},
-	}
-
-	token := &Token{}
-
-	res, err := client.PostForm(fw.TokenURL.String(), form)
-	if err != nil {
-		return token, err
-	}
-
-	defer res.Body.Close()
-	err = json.NewDecoder(res.Body).Decode(token)
-
-	return token, err
-}
-
-// VerifyAccess checks whether access is allowed to all resources of the client using the UMA protocol.
-// https://www.keycloak.org/docs/4.8/authorization_services/index.html#_service_obtaining_permissions
-func (f *ForwardAuth) VerifyAccess(token string) (bool, error) {
-	// allow insecure certificates when enabled
-	client := http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: f.InsecureCertificates},
-		},
-	}
-
-	data := url.Values{}
-	data.Set("grant_type", "urn:ietf:params:oauth:grant-type:uma-ticket")
-	data.Set("audience", fw.ClientID)
-	encoded := data.Encode()
-
-	req, err := http.NewRequest(http.MethodPost, fw.TokenURL.String(), strings.NewReader(encoded))
-	req.Header.Add("Authorization", "Bearer "+token)
-	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Add("Content-Length", fmt.Sprintf("%d", len(encoded)))
-	res, err := client.Do(req)
-
-	// status code is 403 when not allowed by authorization server
-	isAllowedAccess := err == nil && res.StatusCode == 200
-
-	defer res.Body.Close()
-
-	return isAllowedAccess, err
-}
-
-// Get user with token
-
-// User is the intermediate user object used when fetching
-// user info from the authentication service.
-type User struct {
-	ID       string `json:"id"`
-	Email    string `json:"email"`
-	Verified bool   `json:"verified_email"`
-	Hd       string `json:"hd"`
-}
-
-// GetUser retries the user info for the given token from the authentication service.
-func (f *ForwardAuth) GetUser(token string) (User, error) {
-	var user User
-
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: f.InsecureCertificates},
-		},
-	}
-	req, err := http.NewRequest("GET", fw.UserURL.String(), nil)
-	if err != nil {
-		return user, err
-	}
-
-	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", token))
-	res, err := client.Do(req)
-	if err != nil {
-		return user, err
-	}
-
-	defer res.Body.Close()
-	err = json.NewDecoder(res.Body).Decode(&user)
-
-	return user, err
 }
 
 // Utility methods

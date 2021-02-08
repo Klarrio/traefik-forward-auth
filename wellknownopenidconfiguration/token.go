@@ -1,4 +1,4 @@
-package main
+package wellknownopenidconfiguration
 
 import (
 	"encoding/base64"
@@ -7,6 +7,16 @@ import (
 	"strings"
 	"time"
 )
+
+// Token is the intermediate authorization token object
+// used for token deserialization during the token exchange.
+type Token struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"`
+	IDToken      string `json:"id_token"`
+}
 
 // BearerToken is an intermediate object used for parsing bearer tokens
 // retrieved from the wire.
@@ -40,7 +50,7 @@ func (bt *BearerToken) ExpTime() time.Time {
 	return time.Unix(int64(bt.Exp), 0)
 }
 
-func bearerTokenFromWire(wireMessage string) (*BearerToken, error) {
+func BearerTokenFromWire(wireMessage string) (*BearerToken, error) {
 
 	// we receive a JWT token, the format is:
 	// header.payload.signature
@@ -50,7 +60,7 @@ func bearerTokenFromWire(wireMessage string) (*BearerToken, error) {
 	// token comes from Keycloak, we store it in memory, serve it to the app.
 	// It should be the app's responsibility to validate.
 
-	payloadBytes, err := payloadBytesFromJwt(wireMessage)
+	payloadBytes, err := PayloadBytesFromJwt(wireMessage)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +72,7 @@ func bearerTokenFromWire(wireMessage string) (*BearerToken, error) {
 	return token, nil
 }
 
-func payloadBytesFromJwt(wireMessage string) ([]byte, error) {
+func PayloadBytesFromJwt(wireMessage string) ([]byte, error) {
 	// we receive a JWT token, the format is:
 	// header.payload.signature
 

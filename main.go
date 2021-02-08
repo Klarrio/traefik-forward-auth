@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Klarrio/traefik-forward-auth/session"
+	"github.com/Klarrio/traefik-forward-auth/util"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,13 +15,14 @@ import (
 	"github.com/namsral/flag"
 	"github.com/sirupsen/logrus"
 
-	"github.com/Klarrio/traefik-forward-auth/ttlmap"
-	"github.com/Klarrio/traefik-forward-auth/wellknownopenidconfiguration"
+	oidc "github.com/Klarrio/traefik-forward-auth/wellknownopenidconfiguration"
 )
 
 var (
-	fw  *ForwardAuth
-	log logrus.FieldLogger
+	oidcApi          *oidc.WellKnownOpenIDConfiguration
+	sessionInventory *session.Inventory
+	fw               *ForwardAuth
+	log              logrus.FieldLogger
 )
 
 const (
@@ -60,37 +63,34 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	isHandled, secureKey := getValidCookieOrHandleRedirect(fw.CookieName, uri.Path, logger, w, r)
+	isHandled, sessionKey := getValidCookieOrHandleRedirect(fw.CookieName, uri.Path, logger, w, r)
 	if isHandled == handled(true) {
 		// cookie did not validate or there was no cookie, it's already handled
 		return
 	}
 
-	session, hadItem := fw.stateMap.Get(secureKey)
-	if !hadItem {
+	sessionMetadata, sessionExists := sessionInventory.SessionMetadata(sessionKey)
+	if !sessionExists {
 		redirectToAuth(uri.Path, logger, w, r)
 		return
 	}
 
-	if time.Now().After(session.ExpiresAt()) {
+	if time.Now().After(sessionMetadata.ExpiresAt) {
 		logger.WithFields(logrus.Fields{
-			"secure-key": secureKey,
-			"expired-at": session.ExpiresAt().String(),
+			"secure-key": sessionKey,
+			"expired-at": sessionMetadata.ExpiresAt.String(),
 			"now":        time.Now().String(),
 		}).Debug("token for secure key expired, redirecting to auth")
-		endSession(secureKey, w, r)
+		endSession(sessionKey, w, r)
 		redirectToAuth(uri.Path, logger, w, r)
 		return
 	}
 
-	// We have the token available and we could resolve the map item, item not expired yet:
-	var storedToken *Token
-	switch tval := session.Value().(type) {
-	case *Token:
-		storedToken = tval
-	default:
-		logger.Error("Expected the map item to contain a string token but received ", tval)
-		http.Error(w, "Internal server error", 500)
+	accessToken, rawAccessToken := sessionInventory.EnsureValidAccessToken(sessionKey, fw.tokenMinValidity)
+	if accessToken == nil {
+		logger.WithField("session key", sessionKey).Info("Ending session because no valid access token available")
+		endSession(sessionKey, w, r) // end the session when the access token can't be refreshed
+		redirectToAuth(uri.Path, logger, w, r)
 		return
 	}
 
@@ -100,9 +100,8 @@ func handler(w http.ResponseWriter, r *http.Request) {
 			"logout-path":      fw.LogoutPath,
 			"post-redirect-to": fw.PostLogoutPath,
 		}).Info("handling logout ")
-		fw.stateMap.Remove(secureKey)
-		http.SetCookie(w, fw.ClearCookie(r, fw.CookieName))
-		if logoutError := fw.wellKnownOpenIDConfiguration.LogOut(fw.ClientID, storedToken.AccessToken); logoutError != nil {
+		endSession(sessionKey, w, r)
+		if logoutError := oidcApi.LogOut(rawAccessToken); logoutError != nil {
 			logger.WithFields(logrus.Fields{
 				"logout-error": logoutError,
 			}).Error("error while logging out")
@@ -112,87 +111,10 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bearerToken, err := bearerTokenFromWire(storedToken.AccessToken)
-	if err != nil {
-		logger.Error("Error parsing stored token, reason ", err)
-		http.Error(w, "Internal server error", 500)
-		return
-	}
-
-	// Handle token refresh:
-	isAboutToExpire := (bearerToken.Exp - time.Now().Unix()) < (fw.tokenMinValidity.Milliseconds() / 1000) // expires in less then tokenMinValidity
-	if isAboutToExpire {
-		logger.Info("access token about to expire or expired, refreshing using refresh token")
-
-		refreshedToken, refreshError := fw.wellKnownOpenIDConfiguration.TokenRefresh(fw.ClientID, fw.ClientSecret, storedToken.RefreshToken, fw.Scope)
-		if refreshError != nil {
-			logger.WithFields(logrus.Fields{
-				"refresh-token-error": refreshError,
-			}).Error("error while refreshing token")
-			endSession(secureKey, w, r) // end the session when the access token can't be refreshed
-			redirectToAuth(uri.Path, logger, w, r)
-			return
-		}
-
-		refreshedBearerToken, err := bearerTokenFromWire(refreshedToken.AccessToken)
-		if err != nil {
-			logger.Error("Error parsing refreshed token '", refreshedToken, "': ", err)
-			http.Error(w, "Internal server error", 500)
-			return
-		}
-
-		exp := session.ExpiresAt().Sub(time.Now())
-		newTokenEntry := &Token{
-			AccessToken:  refreshedToken.AccessToken,
-			TokenType:    refreshedToken.TokenType,
-			RefreshToken: refreshedToken.RefreshToken,
-			ExpiresIn:    refreshedToken.ExpiresIn,
-		}
-		fw.stateMap.AddWithTTL(secureKey, newTokenEntry, exp)
-
-		storedToken = newTokenEntry
-		bearerToken = refreshedBearerToken
-
-		logger.Info("Updated TTL map with refreshed token '", refreshedToken, "'")
-	} else {
-		// Handle token validation:
-		if fw.tokenValidatorEnabled {
-			validationResult, err := fw.wellKnownOpenIDConfiguration.ValidateToken(storedToken.AccessToken)
-			var requirelogin bool
-			if err != nil {
-				logger.WithFields(logrus.Fields{
-					"error": err,
-				}).Error("Failed to validate token")
-				requirelogin = true
-			} else {
-				if !validationResult.Active {
-					logger.WithFields(logrus.Fields{
-						"result": validationResult,
-					}).Error("Token invalid, redirecting to auth")
-					requirelogin = true
-				}
-			}
-			if requirelogin {
-				endSession(secureKey, w, r)
-				redirectToAuth(uri.Path, logger, w, r)
-				return
-			}
-			// Valid request
-			logger.WithFields(logrus.Fields{
-				"result": validationResult,
-			}).Debug("Allowing valid request")
-		} else {
-			// Valid request
-			logger.WithFields(logrus.Fields{
-				"validator-disabled": true,
-			}).Debug("Allowing valid request")
-		}
-	}
-
 	// Validate user
-	if !fw.ValidateEmail(bearerToken.Email) {
+	if !fw.ValidateEmail(accessToken.Email) {
 		logger.WithFields(logrus.Fields{
-			"email": bearerToken.Email,
+			"email": accessToken.Email,
 		}).Error("Invalid email in stored token")
 		http.Error(w, "Not authorized", 401)
 		return
@@ -204,7 +126,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		logger.Debugf("validating accepted roles for request: %s", acceptedRolesParam)
 		acceptedRoles := strings.Split(acceptedRolesParam, ",")
 		tokenClaims := make(map[string]interface{})
-		claimsBytes, err := payloadBytesFromJwt(storedToken.AccessToken)
+		claimsBytes, err := oidc.PayloadBytesFromJwt(rawAccessToken)
 		if err != nil {
 			logger.Error("unable to parse token claims")
 			http.Error(w, "Internal server error", 500)
@@ -233,7 +155,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("X-Forwarded-Access-Token", storedToken.AccessToken)
+	w.Header().Set("X-Forwarded-Access-Token", rawAccessToken)
 	w.WriteHeader(200)
 }
 
@@ -281,7 +203,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 	}).Debug("About to exchange for code: ", err)
 
 	// Exchange code for token
-	token, err := fw.ExchangeCode(r, qs.Get("code"))
+	token, err := oidcApi.ExchangeCode(r, qs.Get("code"), fw.redirectURI(r))
 
 	logger.WithFields(logrus.Fields{
 		"exchange-result": token,
@@ -295,7 +217,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 	}
 
 	if fw.UMAAuthorization {
-		isAllowedAccess, err := fw.VerifyAccess(token.AccessToken)
+		isAllowedAccess, err := oidcApi.VerifyAccess(token.AccessToken)
 		if err != nil {
 			logger.Error("Access verification failed with: ", err)
 			http.Error(w, "Service unavailable", 503)
@@ -320,8 +242,8 @@ func handleCallback(w http.ResponseWriter, r *http.Request, qs url.Values,
 
 type handled bool
 
-func startSession(w http.ResponseWriter, r *http.Request, token *Token, logger logrus.FieldLogger) error {
-	bearerToken, err := bearerTokenFromWire(token.AccessToken)
+func startSession(w http.ResponseWriter, r *http.Request, token *oidc.Token, logger logrus.FieldLogger) error {
+	bearerToken, err := oidc.BearerTokenFromWire(token.AccessToken)
 	if err != nil {
 		logger.Error("Error parsing bearer token '", token, "': ", err)
 		return errors.New(fmt.Sprintf("Failed to fetch secure key: %s", err))
@@ -329,13 +251,13 @@ func startSession(w http.ResponseWriter, r *http.Request, token *Token, logger l
 
 	expiry := fw.cookieExpiry()
 
-	secureKey, err := getSecureKey()
+	sessionKey, err := getSecureKey()
 	if err != nil {
 		logger.Error("Failed to fetch secure key: ", err)
 		return errors.New(fmt.Sprintf("Failed to fetch secure key: %s", err))
 	}
 
-	fw.stateMap.AddWithTTL(secureKey, token, expiry.Sub(time.Now()))
+	sessionInventory.StoreSession(sessionKey, token, expiry)
 
 	logger.WithFields(logrus.Fields{
 		"expire-at": expiry.String(),
@@ -343,7 +265,7 @@ func startSession(w http.ResponseWriter, r *http.Request, token *Token, logger l
 	}).Debug("setting state cookie with expiry")
 
 	// Generate cookies
-	sessionAuthCookie := fw.MakeSessionAuthCookie(r, secureKey)
+	sessionAuthCookie := fw.MakeSessionAuthCookie(r, sessionKey)
 	sessionInfoCookie := fw.MakeSessionInfoCookie(r, bearerToken.Name)
 	http.SetCookie(w, sessionAuthCookie)
 	http.SetCookie(w, sessionInfoCookie)
@@ -356,8 +278,8 @@ func startSession(w http.ResponseWriter, r *http.Request, token *Token, logger l
 	return nil
 }
 
-func endSession(secureKey string, w http.ResponseWriter, r *http.Request) {
-	fw.stateMap.Remove(secureKey) // cleanup
+func endSession(sessionKey string, w http.ResponseWriter, r *http.Request) {
+	sessionInventory.RemoveSession(sessionKey)
 	http.SetCookie(w, fw.ClearCookie(r, fw.CookieName))
 	http.SetCookie(w, fw.ClearCookie(r, fw.InfoCookieName))
 }
@@ -394,7 +316,9 @@ func redirectToAuth(uriPath string, logger *logrus.Entry, w http.ResponseWriter,
 	logger.Debug("uri.Path was ", uriPath)
 	logger.Debug("fw.Path was ", fw.Path)
 	// Forward them on
-	http.Redirect(w, r, fw.GetLoginURL(r, nonce), http.StatusTemporaryRedirect)
+	returnUrl := fw.returnURL(r)
+	redirectUrl := fw.redirectURI(r)
+	http.Redirect(w, r, oidcApi.GetLoginURL(nonce, returnUrl, redirectUrl), http.StatusTemporaryRedirect)
 }
 
 // Main
@@ -433,7 +357,7 @@ func main() {
 	flag.Parse()
 
 	// Setup logger
-	log = CreateLogger(*logLevel, *logFormat)
+	log = util.CreateLogger(*logLevel, *logFormat)
 
 	// Setup insecure http calls if requested
 	if *insecureCertificates {
@@ -468,44 +392,19 @@ func main() {
 		whitelist = strings.Split(*emailWhitelist, ",")
 	}
 
-	m, err := ttlmap.New()
-	if err != nil {
-		panic(err)
-	}
-
-	wellKnownOpenIDConfiguration, err := wellknownopenidconfiguration.ResolveWellKnownOpenIDConfiguration(log, *oidcIssuer, *clientID, *clientSecret)
+	oidcConfig, err := oidc.ResolveWellKnownOpenIDConfiguration(log, *oidcIssuer, *clientID, *clientSecret, *prompt, *scope, *insecureCertificates)
 	if err != nil {
 		log.Fatal("unable to resolve .well-known/openid-configuration: ", err)
 	}
-
-	loginURL, err := url.Parse(wellKnownOpenIDConfiguration.AuthorizationEndpoint)
-	if err != nil {
-		log.Fatal("unable to parse login url: ", err)
-	}
-
-	tokenURL, err := url.Parse(wellKnownOpenIDConfiguration.TokenEndpoint)
-	if err != nil {
-		log.Fatal("unable to parse token url: ", err)
-	}
-	userURL, err := url.Parse(wellKnownOpenIDConfiguration.UserInfoEndpoint)
-	if err != nil {
-		log.Fatal("unable to parse user url: ", err)
-	}
+	oidcApi = oidcConfig
 
 	// Setup
+	sessionInventory = session.NewInventory(oidcApi, *tokenValidatorEnabled, log)
 	fw = &ForwardAuth{
 		Path:     fmt.Sprintf("/%s", *path),
 		Lifetime: time.Second * time.Duration(*lifetime),
 		Secret:   []byte(*secret),
 		AuthHost: *authHost,
-
-		ClientID:     *clientID,
-		ClientSecret: *clientSecret,
-		Scope:        *scope,
-
-		LoginURL: loginURL,
-		TokenURL: tokenURL,
-		UserURL:  userURL,
 
 		CookieName:     *cookieName,
 		CSRFCookieName: *cSRFCookieName,
@@ -514,18 +413,12 @@ func main() {
 
 		Secure: *secure,
 
-		InsecureCertificates: *insecureCertificates,
-
 		Domain:    domain,
 		Whitelist: whitelist,
 
-		Prompt:           *prompt,
 		UMAAuthorization: *umaAuthorization,
 
-		stateMap:                     m,
-		wellKnownOpenIDConfiguration: wellKnownOpenIDConfiguration,
-		tokenValidatorEnabled:        *tokenValidatorEnabled,
-		tokenMinValidity:			  time.Second * time.Duration(*tokenMinValiditySeconds),
+		tokenMinValidity:             time.Second * time.Duration(*tokenMinValiditySeconds),
 		PostLogoutPath:               *postLogoutPath,
 		LogoutPath:                   *logoutPath,
 
@@ -537,8 +430,10 @@ func main() {
 	http.HandleFunc("/", handler)
 
 	// Start
-	jsonConf, _ := json.Marshal(fw)
-	log.Debug("Starting with options: ", string(jsonConf))
+	fwJsonConf, _ := json.Marshal(fw)
+	log.Debug("FW config: ", string(fwJsonConf))
+	sessionInventoryJsonConf, _ := json.Marshal(sessionInventory)
+	log.Debug("Session inventory config: ", string(sessionInventoryJsonConf))
 	log.Info("Listening on :4181")
 	log.Info(http.ListenAndServe(":4181", nil))
 }
